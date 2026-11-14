@@ -6,7 +6,7 @@
 
 require recipes-fsl/images/imx-image-core.bb
 
-SUMMARY = "bbz custom image: NXP core + NetworkManager + Chromium + apt"
+SUMMARY = "bbz custom image: NXP core + NetworkManager + apt"
 
 # IMAGE_FEATURES are high-level switches handled by core-image.bbclass.
 #   package-management -> keeps the package DB + apt/dpkg in the rootfs
@@ -19,12 +19,7 @@ IMAGE_INSTALL += " \
     packagegroup-bbz-apps \
     apt \
     dpkg \
-    ${CHROMIUM} \
 "
-
-# Chromium lives in meta-browser/meta-chromium. Only install it when that layer is
-# present, so this image still builds without it while you are learning.
-CHROMIUM = "${@'chromium-ozone-wayland' if 'chromium-browser-layer' in d.getVar('BBFILE_COLLECTIONS').split() else ''}"
 
 # NetworkManager and ConnMan both want to own the interfaces; keep only NM.
 # BAD_RECOMMENDATIONS drops packages that are pulled in only as recommendations.

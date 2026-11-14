@@ -103,7 +103,6 @@ cd ~/imx-yocto-bsp
 DISTRO=fsl-imx-wayland MACHINE=imx8mp-lpddr4-evk source imx-setup-release.sh -b build-wayland
 # → shows NXP EULA; read it and accept. You are now in build-wayland/
 
-bitbake-layers add-layer ../sources/meta-browser/meta-chromium
 bitbake-layers add-layer ../sources/meta-bbz
 bitbake-layers show-layers
 ```
@@ -124,11 +123,16 @@ Append:
 DL_DIR = "${HOME}/yocto-cache/downloads"
 SSTATE_DIR = "${HOME}/yocto-cache/sstate-cache"
 
-# 8 cores / 30 GB RAM host
-BB_NUMBER_THREADS = "8"
-PARALLEL_MAKE = "-j 8"
-# Chromium's link step can take >10 GB RAM per job; limit it so the host doesn't OOM
-PARALLEL_MAKE:pn-chromium-ozone-wayland = "-j 4"
+# 8 cores / 32 GB RAM host. The defaults (8 tasks x -j8 = 64 compilers) ran the PC out of
+# RAM and froze it. Max 16 compilers, fewer for the RAM-hungry recipes:
+BB_NUMBER_THREADS = "4"
+PARALLEL_MAKE = "-j 4"
+PARALLEL_MAKE:pn-llvm-native = "-j 3"
+PARALLEL_MAKE:pn-nodejs = "-j 3"
+# Don't start new tasks while the kernel reports memory stalls >1 % of the time
+BB_PRESSURE_MAX_MEMORY = "10000"
+XZ_THREADS = "4"
+ZSTD_THREADS = "4"
 
 # Delete each recipe's work dir after it's built: saves ~60-70 % disk.
 # Remove a recipe from rm_work when you want to inspect its build tree:
@@ -140,8 +144,8 @@ INHERIT += "rm_work"
 # EXTRA_IMAGE_FEATURES += "package-management"
 ```
 
-> 💾 Disk: you have ~158 GB free. A full image with Chromium needs roughly 100–150 GB without
-> `rm_work`, far less with it. Keep `rm_work` on.
+> 💾 Disk: without `rm_work`, every recipe keeps its unpacked sources and build tree, so a build
+> grows past 100 GB. Keep `rm_work` on.
 
 ## 4. Build
 
@@ -154,8 +158,8 @@ ls tmp/work/armv8a-poky-linux/hello-bbz/1.0/    # WORKDIR: sources/, image/ (= $
                                                  # (with rm_work on, add hello-bbz to RM_WORK_EXCLUDE to keep it)
 ```
 
-Then the image. The first build is long: several hours, mostly the toolchain, Qt, the GPU stack and
-**Chromium, which alone is 2–4 h**.
+Then the image. The first build is long (several hours), mostly the toolchain, LLVM, Qt, Node.js,
+Docker and the GPU stack.
 
 ```bash
 bitbake bbz-image
@@ -202,10 +206,12 @@ PACKAGE_FEED_ARCHS = "all armv8a imx8mp_lpddr4_evk"   # = dirs in tmp/deploy/deb
 
 Then on the board, `apt update && apt install <anything you've bitbake'd>`.
 
-### Chromium ✅ (included once meta-chromium is added)
-`chromium-ozone-wayland` from `meta-browser/meta-chromium` runs natively on Weston.
-NXP already appends `wrynose` to the layer's compatibility list (in `meta-imx-sdk/conf/layer.conf`);
-you only have to `bitbake-layers add-layer` it (step 3). On the board, as root:
+### Chromium ❌ (removed: too big for this host)
+Chromium was dropped from the image: its source alone unpacks to ~23 GB, and compiling it took
+most of the RAM/disk/time of the whole build on an 8-core / 32 GB machine.
+To bring it back later: `bitbake-layers add-layer ../sources/meta-browser/meta-chromium`, add
+`chromium-ozone-wayland` to `IMAGE_INSTALL` in `bbz-image.bb`, and set
+`PARALLEL_MAKE:pn-chromium-ozone-wayland = "-j 3"` in local.conf. On the board, as root:
 `chromium --no-sandbox --ozone-platform=wayland`.
 
 ### Claude Code ⚙️ (installed on the board, not baked in)

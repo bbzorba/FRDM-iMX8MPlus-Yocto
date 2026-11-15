@@ -18,6 +18,8 @@ RDEPENDS:${PN}-network = " \
     networkmanager-nmtui \
     networkmanager-wifi \
     bbz-wifi-config \
+    nxp-bt-enable \
+    bluez5 \
     wpa-supplicant \
     iw \
     ca-certificates \

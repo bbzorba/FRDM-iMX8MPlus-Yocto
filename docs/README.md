@@ -29,7 +29,7 @@ From UM12340, Table 1 (features) and Table 3 (connectors). The last column says 
 | Part | Details | In the image |
 |---|---|---|
 | **SoC** i.MX 8M Plus | 4× Cortex-A53 up to 1.8 GHz, **Cortex-M7** 800 MHz, **NPU 2.3 TOPS**, ISP, H.264/H.265 VPU, 3D/2D GPU | A53 runs Linux; NPU/GPU/VPU drivers come with NXP's `imx-image-core`; M7 see below |
-| **Tri-radio module** u-blox MAYA-W276-00B (NXP IW612) | **Wi-Fi 6**, **Bluetooth 5.4 / BLE**, **IEEE 802.15.4** (Thread / Zigbee / Matter). On SDIO, UART, SPI, SAI | Wi-Fi: driver `nxp-wlan` + IW612 firmware + NetworkManager (auto-connect: `bbz-wifi-config`). Bluetooth: `bluez5`. 802.15.4/Thread: layers present (`meta-nxp-openthread`, `meta-nxp-matter-baseline`) but no packages in the image yet |
+| **Tri-radio module** u-blox MAYA-W276-00B (NXP IW612) | **Wi-Fi 6**, **Bluetooth 5.4 / BLE**, **IEEE 802.15.4** (Thread / Zigbee / Matter). On SDIO, UART, SPI, SAI | **Wi-Fi works** on `mlan0` (not `wlan0`): driver `nxp-wlan` + IW612 firmware + NetworkManager, auto-connect via `bbz-wifi-config` (see the meta-bbz README for the four fixes it needed). **Bluetooth/BLE works**: `hci0` via `nxp-bt-enable` + BlueZ, central and peripheral roles (a 10 s scan found 26 devices). 802.15.4/Thread: layers present (`meta-nxp-openthread`, `meta-nxp-matter-baseline`) but no packages in the image yet |
 | Memory | 4 GB LPDDR4, 32 GB eMMC 5.1, 32 MB QSPI NOR, microSD 3.0 (J17) | eMMC = boot device |
 | **Ethernet** | 2× Gigabit RJ45 (J5, J7), PHY YT8521. ETH1 is a **PoE** powered device, ETH2 supports **TSN** | yes |
 | **M.2 Key M 2280** (J23) | PCIe, for an **NVMe SSD** (one is fitted on this board) or an NPU card | PCIe + NVMe drivers in the kernel |
@@ -40,7 +40,7 @@ From UM12340, Table 1 (features) and Table 3 (connectors). The last column says 
 | **CAN + I2C** (J27, 2x5) | high-speed CAN transceiver TJA1051T/3, I2C expansion, reset and on/off signals; CAN termination DIP switch | CAN via SocketCAN (`can-utils` not in the image yet) |
 | **40-pin expansion** (J18) | Raspberry-Pi style: GPIO, I2C, UART, SPI, I2S | `i2c-tools` in the image; GPIO via `/dev/gpiochip*` |
 | Audio | WM8962 codec: headphone/mic jack (J21), speaker plug (J22) | ALSA |
-| **Debug** USB-C J19 (CH342F) | **two serial ports**: 1st = Cortex-A53 Linux console, 2nd = Cortex-M7 console. JTAG 10-pin (J20) | `make console` |
+| **Debug** USB-C J19 (CH342F) | **two serial ports**: 1st = Cortex-A53 Linux console, 2nd = Cortex-M7 console. JTAG 10-pin (J20) | `make console`. On the PC they appear as `/dev/ttyACM0` (Linux) and `/dev/ttyACM1` (M7) |
 | Other | RTC with coin-cell connector (P2), fan header, ON/OFF, RESET and USER buttons, RGB LED | |
 | Power | USB-C PD input (J2, ≥ 45 W charger), aux DC in (J1), PMIC PCA9450 | |
 

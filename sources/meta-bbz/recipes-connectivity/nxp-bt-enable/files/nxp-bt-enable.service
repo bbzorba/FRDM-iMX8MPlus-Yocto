@@ -1,0 +1,21 @@
+[Unit]
+Description=Start NXP IW612 Bluetooth (btnxpuart) once Wi-Fi is fully up
+# NXP blacklists btnxpuart (/etc/modprobe.d/blacklist.conf): Wi-Fi and Bluetooth share one
+# radio, and the moal Wi-Fi driver loads the combined Wi-Fi + Bluetooth firmware over SDIO.
+# If btnxpuart probes before that firmware is fully running, it downloads a Bluetooth-only
+# firmware over the UART instead, and the SDIO link to the Wi-Fi side times out ("cmd53 write
+# error", failed in-band reset): no Wi-Fi until the next boot. Waiting only for mlan0 to
+# appear is NOT enough (tested). Load it after the network is online, plus a short margin.
+# The driver then finds the firmware running ("FW already running"), hci0 appears, and
+# bluetoothd picks it up.
+Wants=network-online.target
+After=network-online.target NetworkManager-wait-online.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStartPre=/bin/sh -c 'for i in $(seq 1 60); do [ -e /sys/class/net/mlan0 ] && break; sleep 1; done; sleep 5'
+ExecStart=/sbin/modprobe btnxpuart
+
+[Install]
+WantedBy=multi-user.target

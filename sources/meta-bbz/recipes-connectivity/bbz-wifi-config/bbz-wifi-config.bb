@@ -24,6 +24,33 @@ do_compile[noexec] = "1"
 python do_install() {
     import hashlib, os, uuid
 
+    # NetworkManager settings for NXP's IW612 driver (moal), installed even without credentials.
+    # The driver creates three interfaces on one radio: mlan0 (station), uap0 (access point)
+    # and wfd0 (Wi-Fi Direct). Left alone, NetworkManager manages all three: it activated the
+    # profile on wfd0 instead of mlan0, reconfigured uap0, and at boot the radio's SDIO link
+    # crashed ("cmd53 write error"). It also set random MAC addresses for scanning. Only mlan0
+    # is managed, with the real MAC.
+    confdir = d.expand('${D}${sysconfdir}/NetworkManager/conf.d')
+    os.makedirs(confdir, exist_ok=True)
+    with open(os.path.join(confdir, '90-nxp-iw612.conf'), 'w') as f:
+        f.write("[keyfile]\n"
+                "unmanaged-devices=interface-name:uap0;interface-name:wfd0;interface-name:p2p-dev-*\n"
+                "\n"
+                "[device-nxp-iw612]\n"
+                "match-device=interface-name:mlan0\n"
+                "wifi.scan-rand-mac-address=no\n")
+
+    # Give the IW612 firmware time to settle before NetworkManager touches mlan0. When NM
+    # started ~2 s after the firmware download (its normal boot timing), the radio's SDIO link
+    # timed out in 3 of 4 boots ("cmd53 write error=-110", failed in-band reset), and Wi-Fi was
+    # dead until the next boot. Starting NM 8 s after mlan0 appears avoids it.
+    dropin = d.expand('${D}${sysconfdir}/systemd/system/NetworkManager.service.d')
+    os.makedirs(dropin, exist_ok=True)
+    with open(os.path.join(dropin, '10-wait-nxp-wifi.conf'), 'w') as f:
+        f.write("[Service]\n"
+                "ExecStartPre=/bin/sh -c 'for i in $(seq 1 30); do "
+                "[ -e /sys/class/net/mlan0 ] && break; sleep 1; done; sleep 8'\n")
+
     ssid = d.getVar('BBZ_WIFI_SSID') or ""
     psk = d.getVar('BBZ_WIFI_PSK') or ""
     if not ssid:
@@ -49,6 +76,7 @@ python do_install() {
 id=bbz-wifi
 uuid={conn_uuid}
 type=wifi
+interface-name=mlan0
 autoconnect=true
 
 [wifi]
@@ -69,6 +97,6 @@ method=auto
     os.chmod(path, 0o600)
 }
 
-FILES:${PN} = "${sysconfdir}/NetworkManager/system-connections"
-ALLOW_EMPTY:${PN} = "1"
+FILES:${PN} = "${sysconfdir}/NetworkManager/system-connections ${sysconfdir}/NetworkManager/conf.d \
+                ${sysconfdir}/systemd/system/NetworkManager.service.d"
 RDEPENDS:${PN} = "networkmanager networkmanager-wifi"

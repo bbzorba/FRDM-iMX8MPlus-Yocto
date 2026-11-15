@@ -26,6 +26,21 @@ IMAGE_INSTALL += " \
 IMAGE_INSTALL:remove = "connman connman-client connman-tools"
 BAD_RECOMMENDATIONS += "connman connman-client connman-tools"
 
+# One network manager only: NetworkManager. NXP's image also enables systemd-networkd
+# (systemd-conf ships 69-systemd-conf-imx.network for eth*, plus a drop-in running
+# systemd-networkd-wait-online --any). networkd then competes with NetworkManager for eth0/eth1,
+# and without an Ethernet cable wait-online holds network-online.target for up to 2 minutes:
+# every service ordered after it (home-hub-node, nxp-bt-enable) starts minutes late.
+# Masking = a /dev/null symlink in /etc/systemd/system, which wins over any enable link.
+bbz_mask_networkd() {
+    for unit in systemd-networkd.service systemd-networkd.socket \
+                systemd-networkd-varlink.socket systemd-networkd-resolve-hook.socket \
+                systemd-networkd-wait-online.service systemd-networkd-persistent-storage.service; do
+        ln -sf /dev/null ${IMAGE_ROOTFS}${sysconfdir}/systemd/system/$unit
+    done
+}
+ROOTFS_POSTPROCESS_COMMAND += "bbz_mask_networkd"
+
 # Extra free space in the rootfs, in KiB (here ~2 GiB), so you have room for apt/npm installs.
 IMAGE_ROOTFS_EXTRA_SPACE = "2097152"
 

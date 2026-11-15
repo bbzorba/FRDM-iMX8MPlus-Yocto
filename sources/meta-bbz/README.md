@@ -220,6 +220,25 @@ Supported networks: WPA2-Personal, and WPA2/WPA3 mixed mode. WPA3-only (SAE) nee
 passphrase instead. The onboard Wi-Fi is NXP's IW612 (SDIO): its driver (`kernel-module-nxp-wlan`)
 and firmware (`firmware-nxp-wifi-nxpiw612-sdio`) are already in the image.
 
+**The Wi-Fi interface is `mlan0`, not `wlan0`.** NXP's driver (`moal`) creates `mlan0`
+(station), `uap0` (access point) and `wfd0` (Wi-Fi Direct). Out of the box, Wi-Fi did not work at
+all. These fixes, each found on the board through the J19 console, make it come up by itself at
+every boot (tested over repeated reboots):
+
+| Problem (symptom) | Cause | Fix in this layer |
+|---|---|---|
+| `mlan0` "unavailable", NM log: *Failed to D-Bus activate wpa_supplicant* | meta-imx builds NXP's wpa_supplicant fork with NXP's `defconfig`, which has `CONFIG_CTRL_IFACE_DBUS_NEW` commented out. `wpa_supplicant -u` exits at once | `recipes-connectivity/wpa-supplicant/wpa-supplicant_%.bbappend` re-enables D-Bus |
+| Profile activated on `wfd0` instead of `mlan0`; `uap0` reconfigured | NM manages all three interfaces; the profile named none | `bbz-wifi-config`: `conf.d/90-nxp-iw612.conf` leaves `uap0`/`wfd0`/`p2p-dev-*` unmanaged and disables scan MAC randomization; the profile has `interface-name=mlan0` |
+| At boot `cmd53 write error=-110`, then Wi-Fi dead until reboot (3 of 4 boots) | NM touched `mlan0` ~2 s after the firmware download, before the firmware had settled | `bbz-wifi-config`: NetworkManager drop-in, starts NM 8 s after `mlan0` appears |
+| `network-online.target` (and every service after it) ~2 min late without an Ethernet cable | NXP's image also runs systemd-networkd for `eth*`, whose `wait-online --any` waits for Ethernet | `bbz-image.bb`: systemd-networkd masked. NetworkManager handles Wi-Fi and Ethernet |
+
+**Bluetooth (same IW612 chip, over UART):** NXP blacklists `btnxpuart` so that it doesn't load
+before the Wi-Fi driver has started the shared firmware. If it loads too early, it downloads a
+Bluetooth-only firmware over the UART, and the Wi-Fi side's SDIO link crashes. Nothing loaded it
+afterwards, so there was no `hci0`. `recipes-connectivity/nxp-bt-enable` loads it after
+`network-online.target` + 5 s. It then reports "FW already running", and `hci0` comes up (central
+and peripheral roles) for `bluetoothctl` and BlueZ.
+
 ### apt ✅ (included)
 NXP's setup already sets `PACKAGE_CLASSES = "package_deb"`, so every recipe produces `.deb`s and
 the image ships `apt`/`dpkg` + a package DB. **But** apt needs a feed of packages built by *your*
@@ -399,7 +418,9 @@ meta-bbz/
 ├── recipes-bbz/hello-bbz/hello-bbz_1.0.bb (+ files/)        minimal C recipe to learn from
 ├── recipes-bbz/home-hub-node/home-hub-node_1.0.bb           our app from <repo>/apps (externalsrc + systemd)
 ├── recipes-connectivity/networkmanager/networkmanager_%.bbappend
-├── recipes-connectivity/bbz-wifi-config/bbz-wifi-config.bb  Wi-Fi auto-connect (creds from site.conf)
+├── recipes-connectivity/bbz-wifi-config/bbz-wifi-config.bb  Wi-Fi auto-connect (creds from site.conf) + IW612 NM fixes
+├── recipes-connectivity/wpa-supplicant/wpa-supplicant_%.bbappend  re-enables D-Bus in NXP's wpa_supplicant
+├── recipes-connectivity/nxp-bt-enable/                     loads the IW612 Bluetooth driver after Wi-Fi is up
 ├── recipes-devtools/claude-code/claude-code_<ver>.bb          Claude Code CLI (prebuilt arm64 binary)
 ├── recipes-devtools/npm/npm_<ver>.bb                          current npm, replaces nodejs-npm
 └── recipes-kernel/linux/linux-imx_%.bbappend                SCMVERSION = "n" (see below)

@@ -181,6 +181,14 @@ the indexer and compilers first, and never the desktop or BitBake itself. Kills 
 
 ## Notes and fixes kept in meta-bbz
 
+- **Wi-Fi (`mlan0`) and Bluetooth (`hci0`) needed five fixes** before they worked at boot:
+  wpa_supplicant without D-Bus, NetworkManager grabbing `uap0`/`wfd0`, an SDIO crash when NM
+  started too early, systemd-networkd delaying `network-online.target`, and the Bluetooth
+  driver being blacklisted. Each is explained in the
+  [meta-bbz README](sources/meta-bbz/README.md) (NetworkManager section).
+- Without an HDMI screen, `weston.service` fails at boot (no display to drive). That is
+  harmless; the rest of the system doesn't depend on it.
+
 - `recipes-kernel/linux/linux-imx_%.bbappend` sets `SCMVERSION = "n"`. Otherwise the kernel's git
   check can mark the release as `-dirty`, which breaks the out-of-tree module dependencies
   (jailhouse) in `do_rootfs`.

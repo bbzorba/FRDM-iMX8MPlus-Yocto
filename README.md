@@ -66,7 +66,7 @@ creates new keys. Typical loop after a code change in `apps/`: `make app-deploy`
 ## Clone and build on a new machine
 
 ```bash
-git clone --recursive https://github.com/bbzorba/frdm-imx8mplus-yocto.git ~/imx-yocto-bsp
+git clone --recursive https://github.com/bbzorba/FRDM-iMX8MPlus-Yocto.git ~/imx-yocto-bsp
 cd ~/imx-yocto-bsp
 # Already cloned without --recursive?  git submodule update --init
 

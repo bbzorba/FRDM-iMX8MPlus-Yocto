@@ -2,7 +2,7 @@ SUMMARY = "Home Hub client node: reports the board's temperatures and metrics to
 DESCRIPTION = "Reads thermal zones, USB-C PD hwmon, CPU load/frequency, memory, disk and uptime \
 through sysfs/procfs and POSTs them as JSON to http://<HUB_HOST>/api/node every 10 s. \
 Started at boot by systemd. Source: apps/home_hub_node in this repository."
-HOMEPAGE = "https://github.com/bbzorba/frdm-imx8mplus-yocto"
+HOMEPAGE = "https://github.com/bbzorba/FRDM-iMX8MPlus-Yocto"
 LICENSE = "CLOSED"
 
 # The source is not fetched: it lives in this repository (apps/home_hub_node, see

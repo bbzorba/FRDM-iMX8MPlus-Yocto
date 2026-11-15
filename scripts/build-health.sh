@@ -30,7 +30,7 @@ while true; do
     thr=$(cat /sys/devices/system/cpu/cpu0/thermal_throttle/package_throttle_count)
     clog=$(ls -t "$B"/tmp/log/cooker/*/[0-9]*.log 2>/dev/null | head -1)
     task=$(grep -oE "Running task [0-9]+ of [0-9]+" "$clog" 2>/dev/null | tail -1 | grep -oE "[0-9]+ of [0-9]+" | tr ' ' '_')
-    if pgrep -f "[b]itbake-server" >/dev/null; then bb=running
+    if pgrep -f "[b]itbake/bin/bitbake-server" >/dev/null; then bb=running
     elif grep -q "Summary: There w" "$clog" 2>/dev/null; then bb=FAILED
     else bb=stopped; fi
 

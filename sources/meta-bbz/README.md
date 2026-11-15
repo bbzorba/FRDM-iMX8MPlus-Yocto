@@ -203,6 +203,23 @@ From `meta-openembedded/meta-networking`. `packagegroup-bbz-network` installs th
 enables `nmtui` + `wifi` PACKAGECONFIG. ConnMan is removed from the image so they don't fight.
 On the board: `nmcli dev wifi connect <SSID> password <pw>` or just `nmtui`.
 
+**Auto-connect at boot** (`recipes-connectivity/bbz-wifi-config`): put the network in
+`build-wayland/conf/site.conf`. BitBake reads it automatically, and it is **git-ignored**, so
+credentials never reach the repository:
+
+```bitbake
+BBZ_WIFI_SSID = "MyNetwork"
+BBZ_WIFI_PSK = "my passphrase"
+```
+
+The recipe writes `/etc/NetworkManager/system-connections/bbz-wifi.nmconnection` (root-only,
+`autoconnect=true`). It stores the derived 256-bit WPA key, not the passphrase, and only a hash
+of the passphrase goes into BitBake's signature files. Without these variables the package is
+empty and the image builds as before. The built `.wic` image contains the key, so don't share it.
+Supported networks: WPA2-Personal, and WPA2/WPA3 mixed mode. WPA3-only (SAE) needs the plain
+passphrase instead. The onboard Wi-Fi is NXP's IW612 (SDIO): its driver (`kernel-module-nxp-wlan`)
+and firmware (`firmware-nxp-wifi-nxpiw612-sdio`) are already in the image.
+
 ### apt ✅ (included)
 NXP's setup already sets `PACKAGE_CLASSES = "package_deb"`, so every recipe produces `.deb`s and
 the image ships `apt`/`dpkg` + a package DB. **But** apt needs a feed of packages built by *your*
@@ -235,18 +252,27 @@ To bring it back later: `bitbake-layers add-layer ../sources/meta-browser/meta-c
 `PARALLEL_MAKE:pn-chromium-ozone-wayland = "-j 3"` in local.conf. On the board, as root:
 `chromium --no-sandbox --ozone-platform=wayland`.
 
-### Claude Code ⚙️ (installed on the board, not baked in)
-Claude Code is a proprietary CLI you log into with your account, so the clean approach is to put
-its prerequisites in the image and install it on the target. `packagegroup-bbz-devtools` already
-includes `nodejs`, `nodejs-npm`, `git` and `ca-certificates`. On the board (linux-arm64, glibc):
+### Claude Code ✅ (baked in)
+`recipes-devtools/claude-code/claude-code_<version>.bb` installs the official prebuilt
+**linux-arm64 (glibc)** binary as `/usr/bin/claude`. It's the same binary that
+`npm install -g @anthropic-ai/claude-code` picks on an arm64 board, because the npm package is
+only a wrapper around a platform package. Notes:
+- License `CLOSED`: Anthropic's commercial terms. The binary is downloaded at build time and is
+  never committed.
+- It's a single-file executable with its program appended to the ELF, so the recipe disables
+  stripping and debug splitting. Those would cut the payload off.
+- `/etc/profile.d/claude-code.sh` sets `DISABLE_AUTOUPDATER=1`. New versions come from rebuilding
+  the image, so the CLI doesn't overwrite a file the package manager owns.
+- To update, rename the recipe to the new version and replace `SRC_URI[sha256sum]` with the value
+  of `curl -sL <tarball-url> | sha256sum`. The command is in the recipe.
 
-```bash
-curl -fsSL https://claude.ai/install.sh | bash        # native installer
-# or:  npm install -g @anthropic-ai/claude-code
-claude
-```
+On the board, set up the network (`nmtui`), then run `claude` and log in.
 
-It needs internet access, so set up the network with NetworkManager first.
+### npm ✅ (current release, replacing the bundled one)
+The `nodejs` recipe bundles an older npm in its `nodejs-npm` package. `recipes-devtools/npm/npm_<version>.bb`
+installs the current npm from the registry instead. It's pure JavaScript, so it doesn't rebuild
+Node.js (about 3 h here). It conflicts with and replaces `nodejs-npm`, so only one of them can be
+in the image. Updating works like Claude Code: rename the recipe and update the sha256.
 
 ### snap ❌ (not supported, and deliberately left out)
 There is **no snapd recipe** in any layer of this BSP (`meta-oe/.../snappy` is the Google
@@ -372,8 +398,20 @@ meta-bbz/
 ├── recipes-bbz/packagegroups/packagegroup-bbz.bb            package lists
 ├── recipes-bbz/hello-bbz/hello-bbz_1.0.bb (+ files/)        minimal C recipe to learn from
 ├── recipes-connectivity/networkmanager/networkmanager_%.bbappend
+├── recipes-connectivity/bbz-wifi-config/bbz-wifi-config.bb  Wi-Fi auto-connect (creds from site.conf)
+├── recipes-devtools/claude-code/claude-code_<ver>.bb          Claude Code CLI (prebuilt arm64 binary)
+├── recipes-devtools/npm/npm_<ver>.bb                          current npm, replaces nodejs-npm
 └── recipes-kernel/linux/linux-imx_%.bbappend                SCMVERSION = "n" (see below)
 ```
+
+### Package versions: why not "latest of everything"?
+Every recipe version comes from the layer commits pinned by NXP's release manifest
+(imx-6.18.37-2.1.0 on Yocto 6.0 LTS). NXP validates that exact combination: kernel, GPU/VPU
+drivers, GStreamer, Qt and so on. Moving every layer to its newest commit gets security fixes,
+but it leaves the tested combination and forces a near-full rebuild. Upgrading a single recipe to
+a new major version (such as Node.js 24) can break the recipes that depend on it.
+The approach used here: keep the release, and add newer versions of individual leaf
+packages in meta-bbz when needed (as with npm and Claude Code).
 
 ### Why `linux-imx_%.bbappend` sets `SCMVERSION = "n"`
 NXP's default (`SCMVERSION = "y"`) appends the git hash to the kernel release and, if git reports

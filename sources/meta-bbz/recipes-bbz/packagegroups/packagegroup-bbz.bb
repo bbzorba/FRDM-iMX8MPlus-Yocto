@@ -17,13 +17,16 @@ RDEPENDS:${PN}-network = " \
     networkmanager-nmcli \
     networkmanager-nmtui \
     networkmanager-wifi \
+    bbz-wifi-config \
     wpa-supplicant \
     iw \
     ca-certificates \
 "
 
-# Things you'll want on a dev board. nodejs+npm make Claude Code installable
-# on the target later (see README).
+# Things you'll want on a dev board.
+#   npm:         current npm from the registry (meta-bbz/recipes-devtools/npm), replacing
+#                the older npm bundled with nodejs (nodejs-npm)
+#   claude-code: Claude Code CLI, prebuilt arm64 binary (meta-bbz/recipes-devtools/claude-code)
 RDEPENDS:${PN}-devtools = " \
     git \
     htop \
@@ -36,7 +39,8 @@ RDEPENDS:${PN}-devtools = " \
     i2c-tools \
     devmem2 \
     nodejs \
-    nodejs-npm \
+    npm \
+    claude-code \
 "
 
 RDEPENDS:${PN}-apps = " \

@@ -9,7 +9,7 @@ STATE="$SCRIPT_DIR/.check-build.state"
 clog=$(ls -t "$B"/tmp/log/cooker/*/[0-9]*.log 2>/dev/null | head -1)
 
 # [x]yz patterns stop pgrep from matching its own command line
-if pgrep -f '[b]itbake-server' >/dev/null; then bb=RUNNING; else bb=STOPPED; fi
+if pgrep -f '[b]itbake/bin/bitbake-server' >/dev/null; then bb=RUNNING; else bb=STOPPED; fi
 prog=$(grep -oE "Running (noexec |setscene )?task [0-9]+ of [0-9]+" "$clog" 2>/dev/null | tail -1 | grep -oE "[0-9]+ of [0-9]+")
 tasks=$(ps -eo etimes=,args= | awk '/run\.do_[a-z_]+\.[0-9]+/ {match($0,/work\/[^/]+\/[^/]+/); r=substr($0,RSTART+5,RLENGTH-5); sub(/.*\//,"",r); match($0,/run\.do_[a-z_]+/); t=substr($0,RSTART+4,RLENGTH-4); printf "%s:%s(%dm) ", r, t, $1/60}')
 core=$(cat /sys/class/hwmon/hwmon*/temp*_input 2>/dev/null | sort -n | tail -1)

@@ -5,7 +5,8 @@ Yocto build tree for **`bbz-image`**, a custom Linux image for NXP's
 
 - BSP: NXP **imx-6.18.37-2.1.0** (Linux 6.18, Yocto Project **6.0 "wrynose"** LTS)
 - `DISTRO = fsl-imx-wayland`, `MACHINE = imx8mp-lpddr4-frdm`, Debian packaging (`apt`/`dpkg`)
-- Image: NXP's `imx-image-core` + NetworkManager + apt + Node.js/npm + dev tools + `hello-bbz`
+- Image: NXP's `imx-image-core` + NetworkManager + apt + Node.js 22 with current npm
+  + **Claude Code** (prebuilt arm64 binary) + dev tools + `hello-bbz`
 
 The full learning guide (Yocto concepts, recipes, packages, flashing, devtool) is in
 **[sources/meta-bbz/README.md](sources/meta-bbz/README.md)**. NXP's own BSP README is at
@@ -93,7 +94,12 @@ sudo bmaptool copy bbz-image-imx8mp-lpddr4-frdm.rootfs.wic.zst /dev/sdX
 ```
 
 Log in as `root` (no password: a dev-only default) on the J19 console (`sudo picocom -b 115200
-/dev/ttyUSB0`) or over SSH. Then set up the network with `nmtui`.
+/dev/ttyUSB0`) or over SSH.
+
+**Wi-Fi at boot:** create `build-wayland/conf/site.conf` (git-ignored, read automatically by
+BitBake) with `BBZ_WIFI_SSID = "..."` and `BBZ_WIFI_PSK = "..."`, then rebuild. The board then
+joins that network by itself through NetworkManager. Without it, use `nmtui` on the board. Details
+are in the meta-bbz README.
 
 ## Helper scripts (`scripts/`)
 

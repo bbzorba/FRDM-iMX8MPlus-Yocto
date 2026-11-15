@@ -11,7 +11,9 @@ BUILD_DIR="${BUILD_DIR:-build-wayland}"
 IMAGE="${1:-bbz-image}"
 LOG="$SCRIPT_DIR/auto-build.log"
 
-while pgrep -f '[b]itbake-server|[b]in/bitbake ' >/dev/null; do sleep 60; done
+# Match BitBake by its install path: a bare "bitbake-server" pattern also matches other
+# processes that merely mention it in their arguments (e.g. earlyoom's --avoid list).
+while pgrep -f '[b]itbake/bin/bitbake-server|[b]itbake/bin/bitbake ' >/dev/null; do sleep 60; done
 echo "=== START $(date '+%F %T') image=$IMAGE build=$BUILD_DIR" >> "$LOG"
 # env -i: start from an empty environment so nothing from ~/.bashrc (e.g. PetaLinux) leaks in
 env -i HOME="$HOME" USER="$USER" LANG=C.UTF-8 \

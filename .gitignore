@@ -21,3 +21,6 @@
 # Editor / office lock and backup files
 .~lock.*#
 *~
+
+# Application build output (apps/<name>/build/ from a manual `make`)
+/apps/**/build/

@@ -5,29 +5,63 @@ Yocto build tree for **`bbz-image`**, a custom Linux image for NXP's
 
 - BSP: NXP **imx-6.18.37-2.1.0** (Linux 6.18, Yocto Project **6.0 "wrynose"** LTS)
 - `DISTRO = fsl-imx-wayland`, `MACHINE = imx8mp-lpddr4-frdm`, Debian packaging (`apt`/`dpkg`)
-- Image: NXP's `imx-image-core` + NetworkManager + apt + Node.js 22 with current npm
-  + **Claude Code** (prebuilt arm64 binary) + dev tools + `hello-bbz`
+- Image: NXP's `imx-image-core` + NetworkManager (Wi-Fi auto-connect) + apt + Node.js 22 with
+  current npm + **Claude Code** (prebuilt arm64 binary) + dev tools + our apps
+  (`home-hub-node` service, `hello-bbz`)
 
-The full learning guide (Yocto concepts, recipes, packages, flashing, devtool) is in
-**[sources/meta-bbz/README.md](sources/meta-bbz/README.md)**. NXP's own BSP README is at
-[sources/meta-imx/README.md](sources/meta-imx/README.md).
+| Where | What |
+|---|---|
+| **[sources/meta-bbz/README.md](sources/meta-bbz/README.md)** | Yocto learning guide: concepts, recipes, packages, flashing, devtool |
+| **[docs/README.md](docs/README.md)** | the board: every module (Wi-Fi/BT/802.15.4, CAN, M.2, cameras...), sensors, Cortex-M7, NXP manuals |
+| **[apps/home_hub_node/README.md](apps/home_hub_node/README.md)** | our application: build, deploy, test ([architecture](apps/home_hub_node/ARCHITECTURE.md)) |
+| [sources/meta-imx/README.md](sources/meta-imx/README.md) | NXP's own BSP README |
 
 ## Layout
 
 ```
 imx-yocto-bsp/
 ├── README.md                 this file
+├── Makefile                  everyday commands: make image / flash / ssh / monitor ... (below)
+├── apps/                     our applications, built into the image by Yocto recipes
+│   └── home_hub_node/        C service that reports board metrics to the ESP32-C6 Home Hub
+├── docs/                     board documentation + NXP manuals and schematic
 ├── setup-environment         → sources/base/setup-environment: enter a build dir
 ├── imx-setup-release.sh      → sources/meta-imx/tools/...: create a NEW build dir (NXP EULA)
 ├── sources/                  layers
-│   ├── meta-bbz/             ← our layer: image, packagegroups, recipes, bbappends (plain files here)
+│   ├── meta-bbz/             ← our layer: image, packagegroups, app/tool recipes, bbappends
 │   └── ...                   NXP / Yocto / OpenEmbedded layers (git submodules, pinned commits)
 ├── build-wayland/
-│   └── conf/                 local.conf + bblayers.conf are tracked; everything else is ignored
+│   └── conf/                 local.conf + bblayers.conf are tracked; site.conf (secrets) and the rest are ignored
 ├── scripts/                  helper scripts for long unattended builds (below)
 ├── downloads/                fetched source tarballs   (ignored, ~11 GB)
 └── .repo/                    NXP `repo` tool metadata (ignored)
 ```
+
+## Everyday commands (`make`)
+
+Run `make` for the list. All targets work from the repository root, in any shell: BitBake is
+started in a clean environment, so `~/.bashrc` can't interfere.
+
+| Command | What it does |
+|---|---|
+| `make image` | build `bbz-image`, with `scripts/mem-guard.sh` running during the build |
+| `make app` | build only the application recipe (`APP=home-hub-node`) |
+| `make status` | progress, temperatures, RAM and new errors of the current or last build |
+| `make lsusb` | list boards waiting in USB serial-download mode (`sudo uuu -lsusb`) |
+| `make wait-usb` | block until a board appears in serial-download mode |
+| `make flash` | flash the eMMC with uuu. Stops with instructions if no board is in serial-download mode |
+| `make flash-sd DEV=/dev/sdX` | write an SD card. Refuses non-removable disks and partitions, and asks before erasing |
+| `make find` | check whether the board answers on the network |
+| `make ssh` | shell on the board |
+| `make monitor` | live board status every 5 s: temperatures, RAM, disk, network, service, failed units |
+| `make logs` | follow the application's journal |
+| `make app-deploy` | rebuild the app and install its package on the running board (no reflash) |
+| `make console` | serial console on J19 (first port = Linux) |
+
+`BOARD` defaults to `root@imx8mp-lpddr4-frdm.local`: the image runs avahi, so the board is found
+by name. Override it with `BOARD=root@<ip>`. SSH skips host-key checks, because every reflash
+creates new keys. Typical loop after a code change in `apps/`: `make app-deploy`, then
+`make logs`. For a release: `make image && make flash`.
 
 ## Clone and build on a new machine
 

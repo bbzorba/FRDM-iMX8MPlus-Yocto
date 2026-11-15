@@ -25,7 +25,7 @@ flowchart LR
 | systemd unit | starts the node at boot (after `network-online.target`), restarts it 10 s after a crash |
 | `home_hub_node` | reads sensors through sysfs/procfs, builds the JSON report, POSTs it |
 | Linux kernel drivers | thermal zones (CPU, SoC), hwmon (USB-C PD), cpufreq, `/proc/stat`, `/proc/meminfo` |
-| Cortex-M7 | not used; would need the `-rpmsg` device tree (see the top-level README) |
+| Cortex-M7 | not used; would need the `-rpmsg` device tree (see [docs/README.md](../../docs/README.md#cortex-m7)) |
 
 No kernel module, no extra library: plain glibc sockets and file reads,
 so the binary survives any Yocto rebuild that keeps glibc compatible.
@@ -72,5 +72,7 @@ Node id = hostname, model = `/proc/device-tree/model`.
   missing hub costs neither CPU nor network.
 - **systemd, not `.bashrc`.** `.bashrc` runs only on a login; the unit
   starts at boot and restarts after crashes.
-- **Rebuilt images wipe `/opt/home-hub`.** Run `make deploy` after
-  flashing a new Yocto image, or add a recipe to the layer.
+- **Part of the image.** The Yocto recipe `home-hub-node_1.0.bb` builds this folder and
+  installs `/usr/bin/home_hub_node` plus the unit (enabled), so a freshly flashed board
+  reports without any manual step. Hand-copied files (the old `/opt/home-hub`) would be
+  wiped by every reflash.

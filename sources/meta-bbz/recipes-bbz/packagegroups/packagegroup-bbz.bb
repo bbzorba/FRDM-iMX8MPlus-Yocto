@@ -43,6 +43,8 @@ RDEPENDS:${PN}-devtools = " \
     claude-code \
 "
 
+# Our own applications (sources in <repo>/apps/)
 RDEPENDS:${PN}-apps = " \
     hello-bbz \
+    home-hub-node \
 "

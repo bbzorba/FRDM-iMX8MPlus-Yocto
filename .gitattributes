@@ -1,0 +1,5 @@
+# Files that are built and run on Linux (also when edited on Windows/WSL): keep LF endings
+* text=auto eol=lf
+# Vendor documents
+*.pdf binary
+*.zip binary

@@ -397,6 +397,7 @@ meta-bbz/
 ├── recipes-bbz/images/bbz-image.bb                          the image
 ├── recipes-bbz/packagegroups/packagegroup-bbz.bb            package lists
 ├── recipes-bbz/hello-bbz/hello-bbz_1.0.bb (+ files/)        minimal C recipe to learn from
+├── recipes-bbz/home-hub-node/home-hub-node_1.0.bb           our app from <repo>/apps (externalsrc + systemd)
 ├── recipes-connectivity/networkmanager/networkmanager_%.bbappend
 ├── recipes-connectivity/bbz-wifi-config/bbz-wifi-config.bb  Wi-Fi auto-connect (creds from site.conf)
 ├── recipes-devtools/claude-code/claude-code_<ver>.bb          Claude Code CLI (prebuilt arm64 binary)
@@ -412,6 +413,30 @@ but it leaves the tested combination and forces a near-full rebuild. Upgrading a
 a new major version (such as Node.js 24) can break the recipes that depend on it.
 The approach used here: keep the release, and add newer versions of individual leaf
 packages in meta-bbz when needed (as with npm and Claude Code).
+
+### Your own applications: `apps/` + an externalsrc recipe
+Application code lives in the same repository, in `<repo>/apps/<name>/`, as a normal C project
+with its own Makefile. One small recipe per app puts it into the image:
+
+```bitbake
+inherit externalsrc systemd
+EXTERNALSRC = "${BBZ_APPS_DIR}/home_hub_node"     # BBZ_APPS_DIR is set in conf/layer.conf
+EXTERNALSRC_BUILD = "${WORKDIR}/build"            # keep build output out of the source tree
+EXTRA_OEMAKE = "-C ${S} BUILD='${B}' CC='${CC}' CFLAGS='${CFLAGS}' LDFLAGS='${LDFLAGS}'"
+do_install() { install -D -m 0755 ${B}/home_hub_node ${D}${bindir}/home_hub_node; ... }
+SYSTEMD_SERVICE:${PN} = "home-hub-node.service"   # installed + enabled at boot
+```
+
+- **externalsrc** skips fetch and unpack and builds the folder in place. BitBake checksums its
+  files, so editing the source is enough: the next `bitbake` rebuilds the app and the image.
+  There's no version to bump.
+- **Pass `CC`, `CFLAGS` and `LDFLAGS` through.** Yocto's flags add hardening, and its `LDFLAGS`
+  add `--hash-style=gnu`. Without them the `ldflags` QA check fails.
+- **inherit systemd** adds the unit to the package plus a preset that enables it, and the
+  package's install scripts handle enable, stop and restart.
+- Then add the package name to `packagegroup-bbz-apps`.
+- To test on a running board without reflashing: `make app-deploy` (root Makefile) builds the
+  `.deb` and installs it with `dpkg -i`.
 
 ### Why `linux-imx_%.bbappend` sets `SCMVERSION = "n"`
 NXP's default (`SCMVERSION = "y"`) appends the git hash to the kernel release and, if git reports

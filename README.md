@@ -1,23 +1,30 @@
 # meta-bbz: custom i.MX 8M Plus image with Yocto
 
 BSP: NXP **imx-6.18.37-2.1.0** (Linux 6.18, Yocto Project **6.0 "wrynose"** LTS).
-Target: **i.MX 8M Plus EVK** (`MACHINE = imx8mp-lpddr4-evk`).
+Target: **FRDM i.MX 8M Plus** development board (`MACHINE = imx8mp-lpddr4-frdm`; 4 GB LPDDR4,
+32 GB eMMC). The bigger 8M Plus EVK would be `imx8mp-lpddr4-evk`. The two boards need different
+bootloaders (DDR setup) and device trees, so always build for the board you actually have.
 If your board is a third-party SoM (Variscite, Toradex, Phytec, Compulab...), use the vendor's
 BSP layer and `MACHINE` instead. Everything else in this guide still applies.
+
+The repository README one level up ([../../README.md](../../README.md)) covers cloning, the
+FRDM connectors, flashing commands and the helper scripts in `scripts/`.
 
 ```
 ~/imx-yocto-bsp/
 ├── imx-setup-release.sh      NXP wrapper: creates a build dir, writes local.conf/bblayers.conf
 ├── setup-environment         re-enters an existing build dir
-├── sources/                  all layers (git repos managed by `repo`)
+├── scripts/                  helpers for unattended builds (auto-build, mem-guard, check-build...)
+├── sources/                  all layers (git submodules, also managed by `repo` on this host)
 │   ├── bitbake/              the build engine (Python)
 │   ├── openembedded-core/    "meta": core recipes and classes (gcc, glibc, busybox, apt, ...)
 │   ├── meta-openembedded/    meta-oe, meta-networking (NetworkManager), meta-python, ...
 │   ├── meta-freescale*/      community i.MX BSP
 │   ├── meta-imx/             NXP's release layers (kernel linux-imx, u-boot-imx, GPU/VPU, images)
-│   ├── meta-browser/         Chromium / Firefox
+│   ├── meta-browser/         Chromium / Firefox (not used by bbz-image)
 │   └── meta-bbz/             ← YOUR layer (this directory)
-└── build-wayland/            created by you: conf/, tmp/, downloads/, sstate-cache/
+├── downloads/                fetched source tarballs (DL_DIR)
+└── build-wayland/            conf/ (tracked in git), tmp/, sstate-cache/
 ```
 
 ---
@@ -53,7 +60,7 @@ FOO ??= "a"          # weak default (lowest priority)
 FOO += "b"           # append with space (immediately)
 FOO:append = " b"    # append at the END of parsing (note the leading space); wins over later '='
 FOO:remove = "b"     # remove word b, applied last
-FOO:imx8mp-lpddr4-evk = "x"   # OVERRIDE: only when MACHINE (or DISTRO, arch, pn-...) matches
+FOO:imx8mp-lpddr4-frdm = "x"  # OVERRIDE: only when MACHINE (or DISTRO, arch, pn-...) matches
 ${@python_expr}      # inline Python
 ```
 
@@ -93,14 +100,17 @@ repo sync -j8
 
 `repo` reads the XML manifest and clones each layer at a pinned commit. `repo status`,
 `repo forall -c 'git log -1 --oneline'` and `repo sync` (to update) are the day-to-day commands.
-Make `meta-bbz` its own git repo so your work is versioned: `cd sources/meta-bbz && git init`.
+
+The whole tree is also one git repo: `meta-bbz`, `scripts/` and `build-wayland/conf/` are normal
+files, and every other layer is a submodule pinned to the manifest's commit. On another machine,
+`git clone --recursive <repo-url>` replaces the `repo init` / `repo sync` steps.
 
 ## 3. Create the build directory
 
 ```bash
 yocto-shell
 cd ~/imx-yocto-bsp
-DISTRO=fsl-imx-wayland MACHINE=imx8mp-lpddr4-evk source imx-setup-release.sh -b build-wayland
+DISTRO=fsl-imx-wayland MACHINE=imx8mp-lpddr4-frdm source imx-setup-release.sh -b build-wayland
 # → shows NXP EULA; read it and accept. You are now in build-wayland/
 
 bitbake-layers add-layer ../sources/meta-bbz
@@ -114,21 +124,28 @@ yocto-shell
 cd ~/imx-yocto-bsp && source setup-environment build-wayland
 ```
 
+To switch boards in an existing build dir, change `MACHINE ??=` at the top of
+`build-wayland/conf/local.conf` and run `bitbake bbz-image` again. Only the board-specific recipes
+(kernel, U-Boot, imx-boot, image) are rebuilt: about 30 minutes here.
+
 ### Tune `build-wayland/conf/local.conf`
 
-Append:
+This is what was appended here (the file is tracked in git):
 
 ```bitbake
-# Keep downloads + sstate outside the build dir so you can delete/recreate builds freely
-DL_DIR = "${HOME}/yocto-cache/downloads"
-SSTATE_DIR = "${HOME}/yocto-cache/sstate-cache"
+# Optional: keep downloads + sstate outside the build dir so you can delete/recreate builds freely
+# DL_DIR = "${HOME}/yocto-cache/downloads"
+# SSTATE_DIR = "${HOME}/yocto-cache/sstate-cache"
 
 # 8 cores / 32 GB RAM host. The defaults (8 tasks x -j8 = 64 compilers) ran the PC out of
 # RAM and froze it. Max 16 compilers, fewer for the RAM-hungry recipes:
 BB_NUMBER_THREADS = "4"
 PARALLEL_MAKE = "-j 4"
 PARALLEL_MAKE:pn-llvm-native = "-j 3"
+PARALLEL_MAKE:pn-llvm = "-j 3"
+PARALLEL_MAKE:pn-clang-native = "-j 3"
 PARALLEL_MAKE:pn-nodejs = "-j 3"
+PARALLEL_MAKE:pn-nodejs-native = "-j 3"
 # Don't start new tasks while the kernel reports memory stalls >1 % of the time
 BB_PRESSURE_MAX_MEMORY = "10000"
 XZ_THREADS = "4"
@@ -146,6 +163,10 @@ INHERIT += "rm_work"
 
 > 💾 Disk: without `rm_work`, every recipe keeps its unpacked sources and build tree, so a build
 > grows past 100 GB. Keep `rm_work` on.
+
+> 🧯 For long unattended builds, `scripts/` (top of the repo) has an auto-restarting `bitbake -k`
+> runner, a RAM guard that kills the biggest compiler before the PC can freeze, and a status
+> checker. See the repository README.
 
 ## 4. Build
 
@@ -165,14 +186,14 @@ Docker and the GPU stack.
 bitbake bbz-image
 ```
 
-Output lands in `tmp/deploy/images/imx8mp-lpddr4-evk/`:
+Output lands in `tmp/deploy/images/imx8mp-lpddr4-frdm/`:
 
 | File | Use |
 |---|---|
-| `bbz-image-imx8mp-lpddr4-evk.rootfs.wic.zst` | full disk image: bootloader + boot partition + rootfs |
+| `bbz-image-imx8mp-lpddr4-frdm.rootfs.wic.zst` | full disk image: bootloader + boot partition + rootfs |
 | `bbz-image-...rootfs.wic.bmap` | block map for fast `bmaptool` flashing |
-| `imx-boot-imx8mp-lpddr4-evk-sd.bin-flash_evk` | bootloader container (SPL + ATF + U-Boot + DDR firmware) for `uuu` |
-| `Image`, `imx8mp-evk*.dtb` | kernel + device trees |
+| `imx-boot-imx8mp-lpddr4-frdm-sd.bin-flash_evk` | bootloader container (SPL + ATF + U-Boot + DDR firmware), for SD and eMMC alike; "flash_evk" is just NXP's target name |
+| `Image`, `imx8mp-frdm*.dtb` | kernel + device trees |
 
 ## 5. The packages you asked for
 
@@ -201,7 +222,7 @@ Bake the feed URL into the image (local.conf):
 ```bitbake
 PACKAGE_FEED_URIS = "http://<host-ip>:8000"
 PACKAGE_FEED_BASE_PATHS = "."
-PACKAGE_FEED_ARCHS = "all armv8a imx8mp_lpddr4_evk"   # = dirs in tmp/deploy/deb/
+PACKAGE_FEED_ARCHS = "all armv8a armv8a-mx8mp imx8mp_lpddr4_frdm"   # = dirs in tmp/deploy/deb/
 ```
 
 Then on the board, `apt update && apt install <anything you've bitbake'd>`.
@@ -240,39 +261,52 @@ If you truly need snaps, you want Ubuntu Core / Ubuntu for i.MX, not Yocto.
 
 ## 6. Flash the board
 
-### Option A: microSD (easiest)
+FRDM-IMX8MPLUS parts used here (from NXP's Quick Start Guide): **SW5** boot-mode DIP switch
+(1 = ON), **SW3** power slide switch, **J2** USB-C power in (PD charger ≥ 45 W), **J3** USB-C
+USB 3.0 OTG (flashing), **J19** USB-C debug UART. There's no "recovery button" like on Jetson
+boards: the SW5 position tells the SoC's BootROM where to boot from.
+
+| Boot from | SW5 1-2-3-4 |
+|---|---|
+| Serial download (`uuu`), the Jetson "recovery mode" equivalent | `0001` |
+| eMMC (factory default) | `0010` |
+| microSD | `0011` |
+
+### Option A: microSD (to try an image without touching the eMMC)
 
 ```bash
-lsblk                                   # identify the card, e.g. /dev/sdb. TRIPLE-CHECK, dd erases it.
-cd tmp/deploy/images/imx8mp-lpddr4-evk
+lsblk -o NAME,SIZE,RM,TRAN,MODEL        # identify the card, e.g. /dev/sdb. TRIPLE-CHECK, this erases it.
+cd tmp/deploy/images/imx8mp-lpddr4-frdm
 sudo umount /dev/sdX?* 2>/dev/null
-sudo bmaptool copy bbz-image-imx8mp-lpddr4-evk.rootfs.wic.zst /dev/sdX
+sudo bmaptool copy bbz-image-imx8mp-lpddr4-frdm.rootfs.wic.zst /dev/sdX   # whole card, not sdX1
 # or without bmap:
-# zstdcat bbz-image-imx8mp-lpddr4-evk.rootfs.wic.zst | sudo dd of=/dev/sdX bs=4M conv=fsync status=progress
+# zstdcat bbz-image-imx8mp-lpddr4-frdm.rootfs.wic.zst | sudo dd of=/dev/sdX bs=4M conv=fsync status=progress
 ```
 
-EVK boot switch **SW4 = `0011`** (boot from microSD). Insert the card and power on.
+Set **SW5 = `0011`**, insert the card and power on.
 
 ### Option B: eMMC with `uuu` (NXP's USB flasher, via the SoC's serial-download mode)
-1. SW4 = **`0001`** (serial download), connect the USB-C **download** port (Type-C labeled for
-   download/OTG) to the PC, power on.
-2. Flash:
-   ```bash
-   cd tmp/deploy/images/imx8mp-lpddr4-evk
-   sudo uuu -b emmc_all imx-boot-imx8mp-lpddr4-evk-sd.bin-flash_evk \
-       bbz-image-imx8mp-lpddr4-evk.rootfs.wic.zst
-   ```
-3. Power off, SW4 = **`0010`** (eMMC), power on.
+`uuu` is NXP's counterpart of NVIDIA's `flash.sh`. In serial-download mode, the BootROM waits on USB.
+uuu loads the bootloader into RAM and starts it. U-Boot then exposes the eMMC over fastboot, and
+uuu streams the image into it.
 
-(Switch values are from NXP's i.MX Linux User's Guide for the 8M Plus EVK. Verify against the
-silkscreen or quick-start guide for your board revision.)
+1. Power off, **SW5 = `0001`**, connect **J3** (the corner USB-C next to the 40-pin header) to the
+   PC, keep power on J2, power on with SW3.
+2. Check and flash:
+   ```bash
+   sudo uuu -lsusb                       # lists "MX865 SDPS:" (MX865 = i.MX 8M Plus)
+   cd tmp/deploy/images/imx8mp-lpddr4-frdm
+   sudo uuu -b emmc_all imx-boot-imx8mp-lpddr4-frdm-sd.bin-flash_evk \
+       'bbz-image-imx8mp-lpddr4-frdm.rootfs.wic.zst/*'      # "/*" = decompress while writing
+   ```
+   This takes about 4 minutes and ends with `Success 1  Failure 0`.
+3. Power off, **SW5 = `0010`** (eMMC), power on.
 
 ### Serial console
-The micro-USB **debug** port exposes 4 serial ports (`/dev/ttyUSB0..3`); the A53 Linux console is
-usually `/dev/ttyUSB2` on the 8M Plus EVK (try the others if silent). You're already in `dialout`.
+Connect **J19** to the PC. You're already in `dialout`.
 
 ```bash
-minicom -D /dev/ttyUSB2 -b 115200      # or: picocom -b 115200 /dev/ttyUSB2
+sudo picocom -b 115200 /dev/ttyUSB0     # or /dev/ttyACM0; try the others if silent
 ```
 
 Log in as `root` with no password. This is a dev-only default from NXP's
@@ -337,5 +371,13 @@ meta-bbz/
 ├── recipes-bbz/images/bbz-image.bb                          the image
 ├── recipes-bbz/packagegroups/packagegroup-bbz.bb            package lists
 ├── recipes-bbz/hello-bbz/hello-bbz_1.0.bb (+ files/)        minimal C recipe to learn from
-└── recipes-connectivity/networkmanager/networkmanager_%.bbappend
+├── recipes-connectivity/networkmanager/networkmanager_%.bbappend
+└── recipes-kernel/linux/linux-imx_%.bbappend                SCMVERSION = "n" (see below)
 ```
+
+### Why `linux-imx_%.bbappend` sets `SCMVERSION = "n"`
+NXP's default (`SCMVERSION = "y"`) appends the git hash to the kernel release and, if git reports
+local changes, `-dirty`. Inside the build that check reported a clean tree as dirty. The kernel
+package became `kernel-6.18.37-…-dirty`, while jailhouse's module depended on the name without
+`-dirty`, so `do_rootfs` failed with "unmet dependencies". With `SCMVERSION = "n"`, the release
+name comes only from the recipe, and the kernel and all modules agree.

@@ -31,7 +31,7 @@ imx-yocto-bsp/
 ## Clone and build on a new machine
 
 ```bash
-git clone --recursive <this-repo-url> ~/imx-yocto-bsp
+git clone --recursive https://github.com/bbzorba/frdm-imx8mplus-yocto.git ~/imx-yocto-bsp
 cd ~/imx-yocto-bsp
 # Already cloned without --recursive?  git submodule update --init
 
@@ -124,6 +124,20 @@ The default parallelism (8 tasks × `make -j8`) ran this 32 GB host out of RAM a
 - `BB_NUMBER_THREADS = "4"`, `PARALLEL_MAKE = "-j 4"`, and `-j 3` for LLVM, Clang and Node.js
 - `BB_PRESSURE_MAX_MEMORY` stops BitBake from starting new tasks under memory pressure
 - `rm_work` deletes each recipe's build tree once it's packaged (saves ~100 GB)
+
+On the host itself, **earlyoom** (`sudo apt install earlyoom`) runs at boot as a system-wide
+safety net. Ubuntu's `systemd-oomd` reacted too late here: the PC froze twice, once with no build
+running, while GNOME's file indexer `localsearch-3` grew past 8 GB. `/etc/default/earlyoom` on this
+host:
+
+```sh
+EARLYOOM_ARGS="-r 3600 -m 5,3 -s 100,100 --prefer (^|/)(localsearch-3|cc1plus|cc1|ld|ld.bfd|ld.gold|lld|rustc|node|java)$ --avoid (^|/)(gnome-shell|Xwayland|systemd|sshd|claude|claude-desktop|Cooker|bitbake-server|bitbake-worker)$"
+```
+
+It sends SIGTERM when available RAM drops below 5 % (~1.5 GB), and SIGKILL below 3 %. It picks
+the indexer and compilers first, and never the desktop or BitBake itself. Kills are logged in
+`journalctl -u earlyoom`. Don't quote the regexes: systemd keeps quote characters literally.
+`scripts/mem-guard.sh` is the narrower build-only guard.
 
 ## Notes and fixes kept in meta-bbz
 

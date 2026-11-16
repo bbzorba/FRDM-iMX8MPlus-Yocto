@@ -39,6 +39,8 @@ python do_install() {
                 "[device-nxp-iw612]\n"
                 "match-device=interface-name:mlan0\n"
                 "wifi.scan-rand-mac-address=no\n")
+    # Note: turning the chip's power save off (moal auto_ds=2 ps_mode=2) was tested and made
+    # boots WORSE (failed 2 of 2 at 100 MHz, vs 0 of 6 with the driver default), so it is not set.
 
     # Give the IW612 firmware time to settle before NetworkManager touches mlan0. When NM
     # started ~2 s after the firmware download (its normal boot timing), the radio's SDIO link

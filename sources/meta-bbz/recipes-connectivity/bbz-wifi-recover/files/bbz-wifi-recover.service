@@ -1,0 +1,12 @@
+[Unit]
+Description=Recover the IW612 Wi-Fi if its SDIO link failed at boot (reload the driver)
+After=NetworkManager.service
+Wants=NetworkManager.service
+
+[Service]
+# simple, not oneshot: boot targets do not wait for it
+Type=simple
+ExecStart=/usr/sbin/bbz-wifi-recover
+
+[Install]
+WantedBy=multi-user.target

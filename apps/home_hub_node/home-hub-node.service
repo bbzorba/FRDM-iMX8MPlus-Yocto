@@ -6,7 +6,7 @@ After=network-online.target
 [Service]
 ExecStart=/usr/bin/home_hub_node
 # Override the hub address here if the name does not resolve:
-# Environment=HUB_HOST=192.168.178.172
+# Environment=HUB_HOST=192.168.1.20
 Restart=always
 RestartSec=10
 

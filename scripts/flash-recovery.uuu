@@ -1,0 +1,21 @@
+uuu_version 1.4.149
+# @_flash.bin            | bootloader (imx-boot-<machine>-sd.bin-flash_evk)
+# @_image   [_flash.bin] | wic image to write to the eMMC
+#
+# uuu's built-in "emmc_all" for the i.MX 8M Plus (SW5 = 0001, Boot ROM serial download over
+# USB-C J3), plus the LED: led-0 blinks while writing and is steady on when done.
+# Used by `make flash-recovery`.
+#
+# Stage 1, Boot ROM: load the bootloader into RAM and start it (i.MX 8M Plus streams via SDPS)
+SDPS: boot -scanterm -f _flash.bin -scanlimited 0x800000
+# Stage 2, U-Boot (now running from RAM) in fastboot: write the eMMC (mmc 2)
+FB: ucmd setenv fastboot_dev mmc
+FB: ucmd setenv mmcdev ${emmc_dev}
+FB: ucmd mmc dev ${emmc_dev}
+FB: ucmd led led-0 blink 250 || echo "no LED blink support"
+FB: flash -raw2sparse all _image
+FB: flash -scanterm -scanlimited 0x800000 bootloader _flash.bin
+FB: ucmd if env exists emmc_ack; then ; else setenv emmc_ack 0; fi;
+FB: ucmd mmc partconf ${emmc_dev} ${emmc_ack} 1 0
+FB: ucmd led led-0 on || echo "no LED"
+FB: done

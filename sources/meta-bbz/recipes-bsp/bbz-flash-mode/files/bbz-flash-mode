@@ -1,0 +1,30 @@
+#!/bin/sh
+# Reboot into U-Boot fastboot on USB-C J3, ready for `make flash` on the PC.
+# Puts a one-time U-Boot script (boot.scr) on the eMMC boot partition and reboots. U-Boot runs
+# it, deletes it, and waits in fastboot. Flashing rewrites the boot partition anyway.
+#   bbz-flash-mode            arm and reboot
+#   bbz-flash-mode --cancel   remove a pending trigger
+set -e
+SCR=/usr/share/bbz-flash-mode/flash-mode.scr
+DEV=/dev/mmcblk2p1
+
+mnt=$(findmnt -no TARGET "$DEV" | head -1)
+if [ -z "$mnt" ]; then
+    mnt=/run/bbz-flash-mode
+    mkdir -p "$mnt"
+    mount "$DEV" "$mnt"
+fi
+
+if [ "$1" = "--cancel" ]; then
+    rm -f "$mnt/boot.scr"
+    sync
+    echo "Flash-mode trigger removed."
+    exit 0
+fi
+
+cp "$SCR" "$mnt/boot.scr"
+sync
+echo "Rebooting into U-Boot fastboot (USB-C J3). Run 'make flash' on the PC."
+# --no-block: return at once, so an SSH session that started this ends cleanly instead of
+# hanging while the network goes down
+systemctl --no-block reboot

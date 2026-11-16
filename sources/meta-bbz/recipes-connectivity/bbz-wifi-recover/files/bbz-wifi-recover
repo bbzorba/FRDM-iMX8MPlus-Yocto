@@ -1,0 +1,52 @@
+#!/bin/sh
+# Recover the IW612 Wi-Fi when its SDIO link failed at boot.
+#
+# On this board the first Wi-Fi commands after boot can kill the SDIO link to the IW612
+# ("cmd53 write error", "Host to Card Failed", "Wakeup card timeout"); Wi-Fi then stays dead
+# until the next boot. Reloading the driver (which reloads the firmware) brings it back.
+# Runs once per boot (bbz-wifi-recover.service). Does nothing when Wi-Fi is healthy, or when it
+# is merely not connected (e.g. the access point is out of range).
+
+log() { echo "$*"; logger -t bbz-wifi-recover "$*"; }
+ERR_RE='cmd53 write error|Host to Card Failed|Wakeup card timeout|SDIO Write ERR|In-band Reset Fail'
+
+# errors after kernel-log line $1
+link_broken() {
+    # grep -c reads everything (grep -q would stop early and make tail print "Broken pipe")
+    [ "$(dmesg | tail -n +"$(( $1 + 1 ))" | grep -cE "$ERR_RE")" -gt 0 ] && return 0
+    [ -e /sys/class/net/mlan0 ] || return 0
+    return 1
+}
+connected() { nmcli -t -f DEVICE,STATE device 2>/dev/null | grep -q '^mlan0:connected$'; }
+
+# Give the normal boot up to 90 s: connected -> done; link broken -> recover
+for i in $(seq 1 90); do
+    connected && exit 0
+    link_broken 0 && break
+    sleep 1
+done
+link_broken 0 || exit 0
+
+for attempt in 1 2 3; do
+    log "Wi-Fi SDIO link failed: reloading the IW612 driver (attempt $attempt)"
+    base=$(dmesg | wc -l)
+    systemctl stop NetworkManager wpa_supplicant nxp-bt-enable 2>/dev/null
+    modprobe -r btnxpuart 2>/dev/null
+    for t in 1 2 3; do modprobe -r moal mlan 2>/dev/null && break; sleep 2; done
+    modprobe moal
+    for t in $(seq 1 30); do [ -e /sys/class/net/mlan0 ] && break; sleep 1; done
+    sleep 8                       # let the firmware settle, like the NetworkManager drop-in
+    systemctl start NetworkManager
+    for t in $(seq 1 45); do
+        connected && break
+        link_broken "$base" && break
+        sleep 1
+    done
+    if connected && ! link_broken "$base"; then
+        log "Wi-Fi recovered (attempt $attempt)"
+        systemctl start nxp-bt-enable 2>/dev/null   # Bluetooth after Wi-Fi, as at boot
+        exit 0
+    fi
+done
+log "Wi-Fi still broken after 3 driver reloads"
+exit 1

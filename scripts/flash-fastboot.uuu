@@ -1,0 +1,27 @@
+uuu_version 1.4.149
+# @_flash.bin            | bootloader (imx-boot-<machine>-sd.bin-flash_evk)
+# @_image   [_flash.bin] | wic image to write to the eMMC
+#
+# Same as uuu's built-in "emmc_all", minus the serial-download (SDP) stage: the board is already
+# running U-Boot from its eMMC, in fastboot mode ("fastboot usb 0", started by bbz-flash-mode
+# over SSH, or by scripts/uboot.py over the J19 console).
+# Used by `make flash`, so the boot switch SW5 can stay at 0010 (eMMC).
+# eMMC = mmc 2 on the FRDM-IMX8MPLUS (U-Boot: "FSL_SDHC: 2 (eMMC)").
+FB: ucmd setenv fastboot_dev mmc
+FB: ucmd setenv mmcdev 2
+FB: ucmd mmc dev 2
+# LED led-0 blinks while flashing (needs U-Boot built with LED_SW_BLINK, see meta-bbz
+# recipes-bsp/u-boot); an older U-Boot just prints a note and flashing continues
+FB: ucmd led led-0 blink 250 || echo "no LED blink support"
+# whole disk image (partition table, boot and root partitions) into the user area
+FB: flash -raw2sparse all _image
+# bootloader into the eMMC boot partition, which the SoC boots from (partconf below)
+FB: flash -scanterm -scanlimited 0x800000 bootloader _flash.bin
+FB: ucmd if env exists emmc_ack; then ; else setenv emmc_ack 0; fi;
+FB: ucmd mmc partconf 2 ${emmc_ack} 1 0
+# LED steady on: flashing finished
+FB: ucmd led led-0 on || echo "no LED"
+# "done" only ends the script on the PC side; U-Boot would stay in fastboot. Reset the board
+# into the new image (acmd = don't wait for an answer, the board is gone).
+FB: acmd reset
+FB: done

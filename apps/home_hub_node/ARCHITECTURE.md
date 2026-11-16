@@ -1,78 +1,82 @@
 # home_hub_node architecture
 
-How the i.MX 8M Plus reports to the ESP32-C6 Home Hub. Build, deploy and
-test: [README.md](README.md). The hub side:
+How the i.MX 8M Plus reports to the ESP32-C6 Home Hub. Build, deploy and test:
+[README.md](README.md). Hub side:
 [ESP32C6-Zephyr-IoT-Projects/applications/web_app](https://github.com/bbzorba/ESP32C6-Zephyr-IoT-Projects/tree/main/applications/web_app).
 
 ## 1. Where it runs
 
-```mermaid
-flowchart LR
-    subgraph SOC["i.MX 8M Plus SoC"]
-        subgraph A53["4× Cortex-A53, Linux (Yocto)"]
-            SD["systemd<br/>home-hub-node.service"] --> APP["home_hub_node<br/>(one process, one thread)"]
-            K["kernel: thermal, hwmon,<br/>cpufreq, /proc"] -->|"sysfs / procfs"| APP
-        end
-        M7["Cortex-M7<br/>(unused)"]
-        TS["2× die temp sensors"] --> K
-    end
-    PD["USB-C PD controller<br/>V/I monitor"] --> K
-    APP -->|"HTTP POST /api/node<br/>TCP, every 10 s"| HUB["ESP32-C6 hub"]
+```
++------------------------- i.MX 8M Plus SoC --------------------------+
+|                                                                      |
+|  4x Cortex-A53, Linux (Yocto)                     Cortex-M7 (unused) |
+|  +-------------------------------------------+                       |
+|  |  systemd: home-hub-node.service           |                       |
+|  |        | starts at boot, restarts on crash|                       |
+|  |        v                                  |                       |
+|  |  home_hub_node  (1 process, 1 thread)     |                       |
+|  |        ^ sysfs / procfs                   |                       |
+|  |  kernel: thermal, hwmon, cpufreq, /proc   |<-- 2x die temp sensors|
+|  +-------------------------------------------+                       |
++----------------------------------------------------------^-----------+
+                                                           |
+                                         USB-C PD controller (V/I monitor)
+
+home_hub_node --- HTTP POST /api/node (TCP, every 10 s) ---> ESP32-C6 hub
 ```
 
 | Part | Job |
 |---|---|
 | systemd unit | starts the node at boot (after `network-online.target`), restarts it 10 s after a crash |
 | `home_hub_node` | reads sensors through sysfs/procfs, builds the JSON report, POSTs it |
-| Linux kernel drivers | thermal zones (CPU, SoC), hwmon (USB-C PD), cpufreq, `/proc/stat`, `/proc/meminfo` |
-| Cortex-M7 | not used; would need the `-rpmsg` device tree (see [docs/README.md](../../docs/README.md#cortex-m7)) |
+| kernel drivers | thermal zones (CPU, SoC), hwmon (USB-C PD), cpufreq, `/proc/stat`, `/proc/meminfo` |
+| Cortex-M7 | not used ([docs/README.md](../../docs/README.md#cortex-m7)) |
 
-No kernel module, no extra library: plain glibc sockets and file reads,
-so the binary survives any Yocto rebuild that keeps glibc compatible.
+Plain glibc sockets and file reads: no kernel module, no extra library.
 
 ## 2. Main loop
 
-```mermaid
-flowchart TD
-    S([Start]) --> B["Read sensors,<br/>build JSON (≤ 16 values)"]
-    B --> P{"TCP connect +<br/>POST succeeds?"}
-    P -- yes --> W["Sleep the rest of 10 s"] --> B
-    P -- no --> D["Hub down: send nothing"]
-    D --> R["Sleep 60 s,<br/>TCP connect only"]
-    R --> U{"Connect<br/>works?"}
-    U -- no --> R
-    U -- yes --> W
+```
+start
+  |
+  v
+read sensors, build JSON (<= 16 values) <------------------+
+  |                                                         |
+  v                                                         |
+TCP connect + POST ok? --yes--> sleep the rest of 10 s -----+
+  | no                                     ^
+  v                                        |
+hub down: send nothing                     |
+  |                                        |
+  v                                        |
+sleep 60 s, TCP connect only --works?--yes-+
+  ^              | no
+  +--------------+
 ```
 
 | Timing | Value | Where |
 |---|---|---|
-| Report period | 10 s, measured on `CLOCK_MONOTONIC` | `PERIOD_S` |
+| Report period | 10 s on `CLOCK_MONOTONIC` | `PERIOD_S` |
 | Retry while the hub is down | 60 s, connect only | `RETRY_S` |
-| Connect / send / receive timeout | 5 s (`SO_SNDTIMEO`, `SO_RCVTIMEO`) | `TIMEOUT_S` |
+| Connect / send / receive timeout | 5 s | `TIMEOUT_S` |
 | Hub marks the node offline | 30 s without a report | hub, `nodes.c` |
 
-## 3. Data path
+## 3. Data sources
 
-| Value | Source | Notes |
-|---|---|---|
-| CPU / SoC temperature | `/sys/class/thermal/thermal_zone*/temp` | m°C → °C |
-| USB-C V / A | `/sys/class/hwmon/*/in0_input`, `curr1_input` | only when non-zero |
-| CPU load | `/proc/stat` | delta since the previous report |
-| CPU frequency | `cpufreq/scaling_cur_freq` | average over all cores |
-| Load avg, memory, disk, uptime | `/proc/loadavg`, `/proc/meminfo`, `statvfs("/")`, `/proc/uptime` | |
+| Value | Source |
+|---|---|
+| CPU / SoC temperature | `/sys/class/thermal/thermal_zone*/temp` (m°C → °C) |
+| USB-C V / A | `/sys/class/hwmon/*/in0_input`, `curr1_input` (only when non-zero) |
+| CPU load | `/proc/stat`, delta since the last report |
+| CPU frequency | `cpufreq/scaling_cur_freq`, average over all cores |
+| Load avg, memory, disk, uptime | `/proc/loadavg`, `/proc/meminfo`, `statvfs("/")`, `/proc/uptime` |
 
 Node id = hostname, model = `/proc/device-tree/model`.
 
-## 4. Crucial points
+## 4. Design points
 
-- **Stateless towards the hub.** One TCP connection per report, nothing
-  buffered while the hub is away: after an outage the hub simply gets the
-  current values again.
-- **Back off when the hub is down.** Only a bare connect every 60 s, so a
-  missing hub costs neither CPU nor network.
-- **systemd, not `.bashrc`.** `.bashrc` runs only on a login; the unit
-  starts at boot and restarts after crashes.
-- **Part of the image.** The Yocto recipe `home-hub-node_1.0.bb` builds this folder and
-  installs `/usr/bin/home_hub_node` plus the unit (enabled), so a freshly flashed board
-  reports without any manual step. Hand-copied files (the old `/opt/home-hub`) would be
-  wiped by every reflash.
+- **Stateless towards the hub:** one TCP connection per report, nothing buffered while the hub
+  is away.
+- **Back off when the hub is down:** only a bare connect every 60 s.
+- **In the image:** the Yocto recipe `home-hub-node_1.0.bb` installs the binary and the enabled
+  unit, so a freshly flashed board reports without a manual step.

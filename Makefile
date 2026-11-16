@@ -1,6 +1,6 @@
 # Everyday commands for the FRDM-IMX8MPLUS Yocto build: build, flash, find the board, log in.
 # Run `make` (or `make help`) for the list. Variables can be overridden on the command line,
-# e.g. `make ssh BOARD=root@192.168.178.50` or `make flash-sd DEV=/dev/sdb`.
+# e.g. `make ssh BOARD=root@192.168.1.50` or `make flash-sd DEV=/dev/sdb`.
 
 TOP       := $(patsubst %/,%,$(dir $(abspath $(lastword $(MAKEFILE_LIST)))))
 BUILD_DIR ?= build-wayland
@@ -19,7 +19,8 @@ DEB_DIR   := $(TOP)/$(BUILD_DIR)/tmp/deploy/deb
 BOOT_BIN  := imx-boot-$(MACHINE)-sd.bin-flash_evk
 WIC       := $(IMAGE)-$(MACHINE).rootfs.wic.zst
 # Every reflash creates new SSH host keys: don't stop on an unknown/changed key
-SSH_OPTS  ?= -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -o ConnectTimeout=5
+SSH_OPTS  ?= -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -o ConnectTimeout=5 \
+             -o ServerAliveInterval=2 -o ServerAliveCountMax=3
 
 # Run BitBake from an empty environment, so nothing from ~/.bashrc (e.g. PetaLinux) leaks in
 define bitbake
@@ -40,7 +41,7 @@ endef
 help: ## Show this list
 	@echo "FRDM-IMX8MPLUS Yocto: make <target> [VAR=value]"
 	@echo
-	@grep -hE '^[a-z][a-z-]*:.*## ' $(MAKEFILE_LIST) | awk 'BEGIN{FS=":.*## "} {printf "  %-12s %s\n", $$1, $$2}'
+	@grep -hE '^[a-z][a-z-]*:.*## ' $(MAKEFILE_LIST) | awk 'BEGIN{FS=":.*## "} {printf "  %-15s %s\n", $$1, $$2}'
 	@echo
 	@echo "Variables: BOARD=$(BOARD)  IMAGE=$(IMAGE)  APP=$(APP)"
 	@echo "           MACHINE=$(MACHINE)  SERIAL=$(SERIAL)  DEV=$(if $(DEV),$(DEV),<unset>)"
@@ -65,12 +66,39 @@ wait-usb: ## Wait until a board appears in serial-download mode (Ctrl+C to stop)
 	@until sudo uuu -lsusb 2>/dev/null | grep -q 'SDP'; do sleep 2; done
 	@sudo uuu -lsusb | grep 'SDP'
 
-flash: check-files ## Flash the image to the board's eMMC with uuu (SW5 = 0001, J3 connected)
+# Everyday flashing: no boot-switch change. The image always travels over USB-C J3 (USB, ~MB/s);
+# only the "go to fastboot" command takes another path:
+#   1. SSH (board running, on the network): `bbz-flash-mode` leaves a one-time U-Boot script on
+#      the boot partition and reboots. U-Boot runs it, deletes it, starts fastboot.  -> J3 only.
+#   2. otherwise the J19 serial console: scripts/uboot.py stops U-Boot's autoboot and starts
+#      fastboot.                                                                 -> J19 + J3.
+# uuu then writes image + bootloader (scripts/flash-fastboot.uuu), and U-Boot resets into it.
+flash: check-files ## Flash the eMMC over USB-C J3 via U-Boot, no SW5 change (control over SSH, or J19)
+	@if ssh $(SSH_OPTS) -o BatchMode=yes $(BOARD) 'command -v bbz-flash-mode' >/dev/null 2>&1; then \
+		echo "Board reachable over SSH: rebooting it into U-Boot fastboot..."; \
+		timeout 20 ssh $(SSH_OPTS) $(BOARD) bbz-flash-mode 2>/dev/null || true; \
+	elif [ -c "$(SERIAL)" ]; then \
+		echo "No SSH to $(BOARD): reaching U-Boot over the serial console $(SERIAL)..."; \
+		python3 -I "$(TOP)/scripts/uboot.py" --port $(SERIAL) fastboot || exit 1; \
+	else \
+		echo "Can't reach the board: no SSH to $(BOARD) and no serial console $(SERIAL)."; \
+		echo "  Boot it from eMMC (SW5 = 0010) with the network up, or connect J19; or use 'make flash-recovery'."; \
+		exit 1; \
+	fi
+	@echo "Waiting for U-Boot fastboot on USB-C J3 (up to 90 s)..."
+	@cd "$(DEPLOY)" && sudo uuu -t 90 -b "$(TOP)/scripts/flash-fastboot.uuu" $(BOOT_BIN) '$(WIC)/*' || { \
+		echo; echo "No fastboot device on J3, or flashing failed. Is USB-C J3 connected to this PC?"; \
+		echo "  The board waits in fastboot: run 'make flash' again, or power-cycle it (it boots normally)."; \
+		exit 1; }
+	@echo; echo "Done. The board resets and boots the new image (SW5 unchanged)."
+
+# Recovery: the SoC's Boot ROM, independent of anything on the eMMC (works on an empty or broken one).
+flash-recovery: check-files ## Flash via the Boot ROM serial-download mode (SW5 = 0001, USB-C J3)
 	@sudo uuu -lsusb 2>/dev/null | grep -q 'SDP' || { \
 		echo "No board in serial-download mode."; \
 		echo "  Power off, set SW5 = 0001, connect USB-C J3 to this PC, power on, then retry"; \
 		echo "  (or run 'make wait-usb' first)."; exit 1; }
-	cd "$(DEPLOY)" && sudo uuu -b emmc_all $(BOOT_BIN) '$(WIC)/*'
+	cd "$(DEPLOY)" && sudo uuu -b "$(TOP)/scripts/flash-recovery.uuu" $(BOOT_BIN) '$(WIC)/*'
 	@echo; echo "Done. Power off, set SW5 = 0010 (eMMC), power on."
 
 flash-sd: check-files ## Write the image to an SD card: make flash-sd DEV=/dev/sdX
@@ -120,8 +148,18 @@ app-deploy: ## Build APP and install its package on the running board (no reflas
 	scp $(SSH_OPTS) "$$deb" $(BOARD):/tmp/ && \
 	ssh $(SSH_OPTS) $(BOARD) "dpkg -i /tmp/$$name && rm /tmp/$$name && systemctl restart $(SERVICE) && systemctl --no-pager status $(SERVICE) | head -3"
 
-console: ## Linux serial console on debug USB-C J19 (exit: Ctrl+A Ctrl+X)
+# Ctrl+C is deliberately passed to the board (to stop programs running there), and Ctrl+D
+# only logs out of the board's shell. The console itself closes with Ctrl+A then Ctrl+X.
+# Access needs the 'dialout' group, not sudo.
+console: ## Linux serial console on debug USB-C J19 (exit: Ctrl+A, then Ctrl+X)
 	@test -c "$(SERIAL)" || { echo "$(SERIAL) not found: is J19 connected? Ports: $$(ls /dev/ttyACM* /dev/ttyUSB* 2>/dev/null | tr '\n' ' ')"; exit 1; }
-	sudo picocom -b 115200 $(SERIAL)
+	@test -r "$(SERIAL)" -a -w "$(SERIAL)" || { echo "No access to $(SERIAL): add yourself to the dialout group (sudo usermod -aG dialout $$USER), then log in again"; exit 1; }
+	@echo "================================================================"
+	@echo " Board console on $(SERIAL), 115200 baud. Press Enter for a prompt."
+	@echo " EXIT:   press Ctrl+A, release, then press Ctrl+X"
+	@echo " Ctrl+C  goes to the board (stops a program there)"
+	@echo " Ctrl+D  logs out of the board shell (the console stays open)"
+	@echo "================================================================"
+	@picocom --quiet -b 115200 $(SERIAL); echo; echo "Console closed."
 
-.PHONY: help image app status lsusb wait-usb flash flash-sd check-files find ssh monitor logs app-deploy console
+.PHONY: help image app status lsusb wait-usb flash flash-recovery flash-sd check-files find ssh monitor logs app-deploy console

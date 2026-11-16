@@ -19,6 +19,7 @@ RDEPENDS:${PN}-network = " \
     networkmanager-wifi \
     bbz-wifi-config \
     nxp-bt-enable \
+    bbz-wifi-recover \
     bluez5 \
     wpa-supplicant \
     iw \
@@ -43,6 +44,8 @@ RDEPENDS:${PN}-devtools = " \
     nodejs \
     npm \
     claude-code \
+    bbz-claude-auth \
+    bbz-flash-mode \
 "
 
 # Our own applications (sources in <repo>/apps/)

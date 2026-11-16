@@ -1,0 +1,25 @@
+From: bbzorba <bbzorba@hotmail.com>
+Subject: [PATCH] arm64: dts: imx8mp-frdm: limit Wi-Fi SDIO (usdhc1) to 100 MHz
+
+The IW612 on usdhc1 intermittently fails at SDR104/200 MHz on this board
+(cmd53 write timeouts right after NetworkManager starts, Wi-Fi dead until
+reboot). Capping the bus at 100 MHz fixed it in all test boots.
+
+Upstream-Status: Inappropriate [board-specific workaround]
+---
+--- a/arch/arm64/boot/dts/freescale/imx8mp-frdm.dts	2026-11-16 01:11:42.411011636 +0100
++++ b/arch/arm64/boot/dts/freescale/imx8mp-frdm.dts	2026-11-16 01:11:42.411872778 +0100
+@@ -969,6 +969,13 @@
+ 	mmc-pwrseq = <&usdhc1_pwrseq>;
+ 	vmmc-supply = <&reg_usdhc1_vmmc>;
+ 	bus-width = <4>;
++	/*
++	 * IW612 Wi-Fi: 200 MHz (SDR104) is not reliable on this board: in about half of the
++	 * boots the first SDIO transfer after NetworkManager starts times out
++	 * ("cmd53 write error=-110") and Wi-Fi stays dead until the next boot.
++	 * At 100 MHz it worked in every test boot, still far above Wi-Fi 6 needs.
++	 */
++	max-frequency = <100000000>;
+ 	keep-power-in-suspend;
+ 	non-removable;
+ 	wakeup-source;

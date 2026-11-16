@@ -1,467 +1,140 @@
-# meta-bbz: custom i.MX 8M Plus image with Yocto
+# meta-bbz: our Yocto layer for the FRDM i.MX 8M Plus
 
 BSP: NXP **imx-6.18.37-2.1.0** (Linux 6.18, Yocto Project **6.0 "wrynose"** LTS).
-Target: **FRDM i.MX 8M Plus** development board (`MACHINE = imx8mp-lpddr4-frdm`; 4 GB LPDDR4,
-32 GB eMMC). The bigger 8M Plus EVK would be `imx8mp-lpddr4-evk`. The two boards need different
-bootloaders (DDR setup) and device trees, so always build for the board you actually have.
-If your board is a third-party SoM (Variscite, Toradex, Phytec, Compulab...), use the vendor's
-BSP layer and `MACHINE` instead. Everything else in this guide still applies.
+Board: **FRDM-IMX8MPLUS**, `MACHINE = imx8mp-lpddr4-frdm` (not the EVK, `imx8mp-lpddr4-evk`:
+different DDR setup, U-Boot and device tree). Building, flashing and the `make` commands are in the
+[repository README](../../README.md); this file explains the layer and how Yocto works.
 
-The repository README one level up ([../../README.md](../../README.md)) covers cloning, the
-FRDM connectors, flashing commands and the helper scripts in `scripts/`.
-
-```
-~/imx-yocto-bsp/
-├── imx-setup-release.sh      NXP wrapper: creates a build dir, writes local.conf/bblayers.conf
-├── setup-environment         re-enters an existing build dir
-├── scripts/                  helpers for unattended builds (auto-build, mem-guard, check-build...)
-├── sources/                  all layers (git submodules, also managed by `repo` on this host)
-│   ├── bitbake/              the build engine (Python)
-│   ├── openembedded-core/    "meta": core recipes and classes (gcc, glibc, busybox, apt, ...)
-│   ├── meta-openembedded/    meta-oe, meta-networking (NetworkManager), meta-python, ...
-│   ├── meta-freescale*/      community i.MX BSP
-│   ├── meta-imx/             NXP's release layers (kernel linux-imx, u-boot-imx, GPU/VPU, images)
-│   ├── meta-browser/         Chromium / Firefox (not used by bbz-image)
-│   └── meta-bbz/             ← YOUR layer (this directory)
-├── downloads/                fetched source tarballs (DL_DIR)
-└── build-wayland/            conf/ (tracked in git), tmp/, sstate-cache/
-```
-
----
-
-## 0. The mental model (read this first)
+## 1. Yocto in one page
 
 | Concept | What it is | Low-level analogy |
 |---|---|---|
-| **BitBake** | Task scheduler + metadata parser. Runs tasks, caches results by input hash. | `make`, but its "targets" are tasks of recipes |
-| **Recipe** `foo_1.2.bb` | How to fetch, patch, configure, compile, install and package ONE piece of software | One Makefile per component |
-| **bbappend** `foo_%.bbappend` | Modifies another layer's recipe without forking it | A patch on the Makefile |
-| **Class** `*.bbclass` | Shared logic recipes `inherit` (autotools, cmake, meson, kernel, image...) | An included `.mk` |
-| **Layer** `meta-*` | A git repo grouping recipes, classes and conf. Priority decides who wins. | A vendor tree |
-| **conf**: `local.conf`, `bblayers.conf`, `machine/*.conf`, `distro/*.conf` | Global variables. MACHINE = hardware (SoC tune, kernel, DTB, bootloader). DISTRO = policy (init system, libc, features). | Kconfig for the whole system |
-| **Package** | Output of a recipe after `do_package`, split into `foo`, `foo-dev`, `foo-dbg`... (.deb here) | |
-| **Image** | A recipe whose job is to install packages into a rootfs and produce `.wic` / `.ext4` / `.tar` | The final firmware blob |
-| **sstate-cache** | Cached task outputs, keyed by a hash of all inputs. This is why rebuilds are fast. | ccache for everything |
+| **BitBake** | task scheduler; caches results by input hash | `make` with recipe tasks as targets |
+| **Recipe** `foo_1.2.bb` | how to fetch, patch, build, install and package one component | one Makefile per component |
+| **bbappend** `foo_%.bbappend` | changes another layer's recipe without forking it | a patch on that Makefile |
+| **Class** `*.bbclass` | shared logic recipes `inherit` (cmake, kernel, image, systemd...) | an included `.mk` |
+| **Layer** `meta-*` | recipes + classes + conf; the higher priority wins | a vendor tree |
+| **MACHINE / DISTRO** | hardware (SoC, kernel, DTB, bootloader) / policy (init, features) | Kconfig for the whole system |
+| **Image** | a recipe that installs packages into a rootfs and writes `.wic` | the firmware blob |
+| **sstate-cache** | cached task outputs; why rebuilds take minutes | ccache for everything |
 
-Every recipe runs this task chain. Each step has a log and a runnable script under
-`tmp/work/<arch>/<recipe>/<version>/temp/` (`log.do_compile`, `run.do_compile`):
-
-```
-do_fetch → do_unpack → do_patch → do_configure → do_compile → do_install
-        → do_package → do_package_write_deb → (image) do_rootfs → do_image_wic
-```
-
-Variable syntax you'll see everywhere:
+Task chain of every recipe (logs and runnable scripts in `tmp/work/<arch>/<recipe>/<ver>/temp/`):
+`do_fetch → do_unpack → do_patch → do_configure → do_compile → do_install → do_package →
+do_package_write_deb`, and for images `do_rootfs → do_image_wic`.
 
 ```bitbake
-FOO = "a"            # assign
-FOO ?= "a"           # assign if unset
-FOO ??= "a"          # weak default (lowest priority)
-FOO += "b"           # append with space (immediately)
-FOO:append = " b"    # append at the END of parsing (note the leading space); wins over later '='
-FOO:remove = "b"     # remove word b, applied last
-FOO:imx8mp-lpddr4-frdm = "x"  # OVERRIDE: only when MACHINE (or DISTRO, arch, pn-...) matches
-${@python_expr}      # inline Python
+FOO = "a"     FOO ?= "a"     FOO ??= "a"          # assign / if unset / weak default
+FOO += "b"    FOO:append = " b"    FOO:remove = "b"  # append now / at end of parsing / remove word
+FOO:imx8mp-lpddr4-frdm = "x"                        # override: only for this MACHINE (or pn-..., arch)
 ```
 
-The single most useful debug command: `bitbake -e <recipe> | less` dumps every variable's final
-value AND the history of how it got there (search for `# $FOO`).
+Most useful debug command: `bitbake -e <recipe> | less` (every variable and how it got its value).
 
----
+## 2. Host notes
 
-## 1. Host setup (already done on this machine)
+- Packages: `build-essential chrpath cpio diffstat file gawk git python3 python3-git
+  python3-jinja2 python3-pexpect socat texinfo unzip wget xz-utils zstd lz4 repo bmap-tools uuu
+  picocom python3-serial`. Ubuntu 26.04 is on wrynose's tested-host list.
+- **PetaLinux conflict:** sourcing PetaLinux's `settings.sh` (e.g. from `~/.bashrc`) puts its
+  own `git`/`python3` first in `PATH` and breaks Yocto. The root `Makefile` and `scripts/` always
+  run BitBake with `env -i`; by hand, use a clean shell.
+- `build-wayland/conf/local.conf` (tracked) limits parallelism to protect the 32 GB host
+  (4 tasks × `-j 4`, `-j 3` for LLVM/Clang/Node.js, `BB_PRESSURE_MAX_MEMORY`) and enables
+  `rm_work`. Switching boards = change `MACHINE ??=` there; only board-specific recipes rebuild.
 
-```bash
-sudo apt install build-essential chrpath cpio debianutils diffstat file gawk gcc git \
-  iputils-ping libacl1 locales python3 python3-git python3-jinja2 python3-pexpect \
-  python3-pip python3-subunit socat texinfo unzip wget xz-utils zstd lz4 repo bmap-tools uuu
-```
+## 3. What the image adds on top of NXP's `imx-image-core`
 
-Ubuntu 26.04 is on wrynose's officially tested host list (`SANITY_TESTED_DISTROS`).
-
-> ⚠️ **PetaLinux conflict.** `~/.bashrc` sources `~/Desktop/Embedded_Systems/PetaLinux/settings.sh`,
-> which puts PetaLinux's own `git`, `python3`, `gawk`... first in `PATH`. That breaks Yocto (and
-> already breaks plain `git clone` over HTTPS). **Always work from a clean shell**:
->
-> ```bash
-> alias yocto-shell='env -i HOME=$HOME USER=$USER TERM=$TERM LANG=C.UTF-8 \
->   PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin bash --noprofile --norc'
-> ```
-> Put that alias in `~/.bash_aliases`, then type `yocto-shell` before any Yocto work.
-> Alternatively, only source PetaLinux on demand instead of in `.bashrc`.
-
-## 2. Fetch the BSP (already done)
-
-```bash
-mkdir ~/imx-yocto-bsp && cd ~/imx-yocto-bsp
-repo init -u https://github.com/nxp-imx/imx-manifest -b imx-linux-wrynose -m imx-6.18.37-2.1.0.xml
-repo sync -j8
-```
-
-`repo` reads the XML manifest and clones each layer at a pinned commit. `repo status`,
-`repo forall -c 'git log -1 --oneline'` and `repo sync` (to update) are the day-to-day commands.
-
-The whole tree is also one git repo: `meta-bbz`, `scripts/` and `build-wayland/conf/` are normal
-files, and every other layer is a submodule pinned to the manifest's commit. On another machine,
-`git clone --recursive <repo-url>` replaces the `repo init` / `repo sync` steps.
-
-## 3. Create the build directory
-
-```bash
-yocto-shell
-cd ~/imx-yocto-bsp
-DISTRO=fsl-imx-wayland MACHINE=imx8mp-lpddr4-frdm source imx-setup-release.sh -b build-wayland
-# → shows NXP EULA; read it and accept. You are now in build-wayland/
-
-bitbake-layers add-layer ../sources/meta-bbz
-bitbake-layers show-layers
-```
-
-Next time, re-enter an existing build with:
-
-```bash
-yocto-shell
-cd ~/imx-yocto-bsp && source setup-environment build-wayland
-```
-
-To switch boards in an existing build dir, change `MACHINE ??=` at the top of
-`build-wayland/conf/local.conf` and run `bitbake bbz-image` again. Only the board-specific recipes
-(kernel, U-Boot, imx-boot, image) are rebuilt: about 30 minutes here.
-
-### Tune `build-wayland/conf/local.conf`
-
-This is what was appended here (the file is tracked in git):
-
-```bitbake
-# Optional: keep downloads + sstate outside the build dir so you can delete/recreate builds freely
-# DL_DIR = "${HOME}/yocto-cache/downloads"
-# SSTATE_DIR = "${HOME}/yocto-cache/sstate-cache"
-
-# 8 cores / 32 GB RAM host. The defaults (8 tasks x -j8 = 64 compilers) ran the PC out of
-# RAM and froze it. Max 16 compilers, fewer for the RAM-hungry recipes:
-BB_NUMBER_THREADS = "4"
-PARALLEL_MAKE = "-j 4"
-PARALLEL_MAKE:pn-llvm-native = "-j 3"
-PARALLEL_MAKE:pn-llvm = "-j 3"
-PARALLEL_MAKE:pn-clang-native = "-j 3"
-PARALLEL_MAKE:pn-nodejs = "-j 3"
-PARALLEL_MAKE:pn-nodejs-native = "-j 3"
-# Don't start new tasks while the kernel reports memory stalls >1 % of the time
-BB_PRESSURE_MAX_MEMORY = "10000"
-XZ_THREADS = "4"
-ZSTD_THREADS = "4"
-
-# Delete each recipe's work dir after it's built: saves ~60-70 % disk.
-# Remove a recipe from rm_work when you want to inspect its build tree:
-INHERIT += "rm_work"
-# RM_WORK_EXCLUDE += "hello-bbz linux-imx"
-
-# Already set by NXP's script, shown here so you know where apt comes from:
-# PACKAGE_CLASSES = "package_deb"
-# EXTRA_IMAGE_FEATURES += "package-management"
-```
-
-> 💾 Disk: without `rm_work`, every recipe keeps its unpacked sources and build tree, so a build
-> grows past 100 GB. Keep `rm_work` on.
-
-> 🧯 For long unattended builds, `scripts/` (top of the repo) has an auto-restarting `bitbake -k`
-> runner, a RAM guard that kills the biggest compiler before the PC can freeze, and a status
-> checker. See the repository README.
-
-## 4. Build
-
-Start small, so you learn the loop on something that builds in minutes:
-
-```bash
-bitbake hello-bbz                       # toolchain + your recipe
-bitbake -c listtasks hello-bbz
-ls tmp/work/armv8a-poky-linux/hello-bbz/1.0/    # WORKDIR: sources/, image/ (= ${D}), packages-split/, temp/ (logs)
-                                                 # (with rm_work on, add hello-bbz to RM_WORK_EXCLUDE to keep it)
-```
-
-Then the image. The first build is long (several hours), mostly the toolchain, LLVM, Qt, Node.js,
-Docker and the GPU stack.
-
-```bash
-bitbake bbz-image
-```
-
-Output lands in `tmp/deploy/images/imx8mp-lpddr4-frdm/`:
-
-| File | Use |
-|---|---|
-| `bbz-image-imx8mp-lpddr4-frdm.rootfs.wic.zst` | full disk image: bootloader + boot partition + rootfs |
-| `bbz-image-...rootfs.wic.bmap` | block map for fast `bmaptool` flashing |
-| `imx-boot-imx8mp-lpddr4-frdm-sd.bin-flash_evk` | bootloader container (SPL + ATF + U-Boot + DDR firmware), for SD and eMMC alike; "flash_evk" is just NXP's target name |
-| `Image`, `imx8mp-frdm*.dtb` | kernel + device trees |
-
-## 5. The packages you asked for
-
-### NetworkManager ✅ (included)
-From `meta-openembedded/meta-networking`. `packagegroup-bbz-network` installs the daemon, `nmcli`,
-`nmtui` and the Wi-Fi plugin. `recipes-connectivity/networkmanager/networkmanager_%.bbappend`
-enables `nmtui` + `wifi` PACKAGECONFIG. ConnMan is removed from the image so they don't fight.
-On the board: `nmcli dev wifi connect <SSID> password <pw>` or just `nmtui`.
-
-**Auto-connect at boot** (`recipes-connectivity/bbz-wifi-config`): put the network in
-`build-wayland/conf/site.conf`. BitBake reads it automatically, and it is **git-ignored**, so
-credentials never reach the repository:
-
-```bitbake
-BBZ_WIFI_SSID = "MyNetwork"
-BBZ_WIFI_PSK = "my passphrase"
-```
-
-The recipe writes `/etc/NetworkManager/system-connections/bbz-wifi.nmconnection` (root-only,
-`autoconnect=true`). It stores the derived 256-bit WPA key, not the passphrase, and only a hash
-of the passphrase goes into BitBake's signature files. Without these variables the package is
-empty and the image builds as before. The built `.wic` image contains the key, so don't share it.
-Supported networks: WPA2-Personal, and WPA2/WPA3 mixed mode. WPA3-only (SAE) needs the plain
-passphrase instead. The onboard Wi-Fi is NXP's IW612 (SDIO): its driver (`kernel-module-nxp-wlan`)
-and firmware (`firmware-nxp-wifi-nxpiw612-sdio`) are already in the image.
-
-**The Wi-Fi interface is `mlan0`, not `wlan0`.** NXP's driver (`moal`) creates `mlan0`
-(station), `uap0` (access point) and `wfd0` (Wi-Fi Direct). Out of the box, Wi-Fi did not work at
-all. These fixes, each found on the board through the J19 console, make it come up by itself at
-every boot (tested over repeated reboots):
-
-| Problem (symptom) | Cause | Fix in this layer |
+| Feature | Where | Notes |
 |---|---|---|
-| `mlan0` "unavailable", NM log: *Failed to D-Bus activate wpa_supplicant* | meta-imx builds NXP's wpa_supplicant fork with NXP's `defconfig`, which has `CONFIG_CTRL_IFACE_DBUS_NEW` commented out. `wpa_supplicant -u` exits at once | `recipes-connectivity/wpa-supplicant/wpa-supplicant_%.bbappend` re-enables D-Bus |
-| Profile activated on `wfd0` instead of `mlan0`; `uap0` reconfigured | NM manages all three interfaces; the profile named none | `bbz-wifi-config`: `conf.d/90-nxp-iw612.conf` leaves `uap0`/`wfd0`/`p2p-dev-*` unmanaged and disables scan MAC randomization; the profile has `interface-name=mlan0` |
-| At boot `cmd53 write error=-110`, then Wi-Fi dead until reboot (3 of 4 boots) | NM touched `mlan0` ~2 s after the firmware download, before the firmware had settled | `bbz-wifi-config`: NetworkManager drop-in, starts NM 8 s after `mlan0` appears |
-| `network-online.target` (and every service after it) ~2 min late without an Ethernet cable | NXP's image also runs systemd-networkd for `eth*`, whose `wait-online --any` waits for Ethernet | `bbz-image.bb`: systemd-networkd masked. NetworkManager handles Wi-Fi and Ethernet |
+| NetworkManager (`nmcli`, `nmtui`, Wi-Fi) | `packagegroup-bbz-network`, `networkmanager_%.bbappend` | ConnMan removed |
+| Wi-Fi auto-connect | `recipes-connectivity/bbz-wifi-config` | SSID/passphrase from git-ignored `site.conf`; stores only the derived WPA key (root-only) |
+| apt / dpkg | `bbz-image.bb` | needs a feed of *this* build's `.deb`s (`bitbake package-index`, serve `tmp/deploy/deb`); Debian/Ubuntu archives are incompatible |
+| Claude Code | `recipes-devtools/claude-code/claude-code_<ver>.bb` | official linux-arm64 binary; no strip (payload appended to the ELF); autoupdater off |
+| Claude login without browser | `recipes-devtools/claude-code/bbz-claude-auth.bb` | `CLAUDE_CODE_OAUTH_TOKEN` from `site.conf` (`claude setup-token` on the PC) in root-only `/etc/claude-code/auth.env` |
+| current npm | `recipes-devtools/npm/npm_<ver>.bb` | replaces the older `nodejs-npm` without rebuilding Node.js |
+| Bluetooth | `recipes-connectivity/nxp-bt-enable` | see section 4 |
+| our apps | `recipes-bbz/home-hub-node`, `hello-bbz` | see section 5 |
+| flash without boot switch | `recipes-bsp/bbz-flash-mode`, `recipes-bsp/u-boot` | `make flash`; LED blinks while flashing |
 
-**Bluetooth (same IW612 chip, over UART):** NXP blacklists `btnxpuart` so that it doesn't load
-before the Wi-Fi driver has started the shared firmware. If it loads too early, it downloads a
-Bluetooth-only firmware over the UART, and the Wi-Fi side's SDIO link crashes. Nothing loaded it
-afterwards, so there was no `hci0`. `recipes-connectivity/nxp-bt-enable` loads it after
-`network-online.target` + 5 s. It then reports "FW already running", and `hci0` comes up (central
-and peripheral roles) for `bluetoothctl` and BlueZ.
+Not included: **Chromium** (too big to build on this host; re-add via `meta-browser/meta-chromium`)
+and **snap** (no snapd for Yocto; use Docker, which is in the image, or apt with your own feed).
 
-### apt ✅ (included)
-NXP's setup already sets `PACKAGE_CLASSES = "package_deb"`, so every recipe produces `.deb`s and
-the image ships `apt`/`dpkg` + a package DB. **But** apt needs a feed of packages built by *your*
-Yocto build. Debian/Ubuntu archives are **not** compatible (different glibc, compiler flags,
-package splits) and will break the system.
+Updating a pinned leaf package (npm, Claude Code): rename the recipe to the new version and
+replace `SRC_URI[sha256sum]`; the command is in each recipe. The rest of the BSP stays on NXP's
+validated release: moving all layers to newer commits means a near-full rebuild and an untested
+combination.
 
-Serve your own feed:
+## 4. Wi-Fi and Bluetooth (NXP IW612, interface `mlan0`)
 
-```bash
-# host
-bitbake package-index                     # generates Packages indexes in tmp/deploy/deb/
-cd tmp/deploy/deb && python3 -m http.server 8000
-```
+The onboard radio is a u-blox MAYA-W276 (NXP IW612): Wi-Fi on SDIO (`mlan0`, not `wlan0`),
+Bluetooth on UART (`hci0`). Out of the box Wi-Fi did not work at all; these are the fixes, each
+found on the board through the J19 console:
 
-Bake the feed URL into the image (local.conf):
+| Symptom | Cause | Fix |
+|---|---|---|
+| `mlan0` "unavailable", *Failed to D-Bus activate wpa_supplicant* | NXP's wpa_supplicant `defconfig` has `CONFIG_CTRL_IFACE_DBUS_NEW` off | `wpa-supplicant_%.bbappend` re-enables D-Bus |
+| profile activated on `wfd0` instead of `mlan0` | NetworkManager managed all three driver interfaces | `bbz-wifi-config`: `uap0`/`wfd0`/`p2p-dev-*` unmanaged, profile bound to `mlan0`, no scan MAC randomization |
+| boot ~2 min slow without Ethernet | NXP also enables systemd-networkd, whose wait-online waits for Ethernet | `bbz-image.bb` masks systemd-networkd |
+| no `hci0` | NXP blacklists `btnxpuart`; loading it before the Wi-Fi firmware runs crashes the SDIO link | `nxp-bt-enable` loads it after `network-online.target` + 5 s |
+| no Wi-Fi after some boots: `cmd53 write error=-110` or `Wakeup card timeout`, then `mlan0` gone | the IW612's SDIO link times out on the first driver commands after boot. NetworkManager's start-up query is always the first, but it also failed with `mlan0` unmanaged, so NM is only the trigger. Rate: about 1 boot in 2 at 200 MHz, about 1 in 4 at 100 MHz. No effect: power save off, station-only `drv_mode=1`, SDIO runtime PM off; the upstream 20 ms regulator delay is already in NXP's DTS | kernel DTS patch caps the bus at 100 MHz, and **`bbz-wifi-recover`** reloads the driver when it happens: Wi-Fi is back about 30 s later |
 
-```bitbake
-PACKAGE_FEED_URIS = "http://<host-ip>:8000"
-PACKAGE_FEED_BASE_PATHS = "."
-PACKAGE_FEED_ARCHS = "all armv8a armv8a-mx8mp imx8mp_lpddr4_frdm"   # = dirs in tmp/deploy/deb/
-```
+## 5. Our applications (`<repo>/apps/` + externalsrc recipes)
 
-Then on the board, `apt update && apt install <anything you've bitbake'd>`.
-
-### Chromium ❌ (removed: too big for this host)
-Chromium was dropped from the image: its source alone unpacks to ~23 GB, and compiling it took
-most of the RAM/disk/time of the whole build on an 8-core / 32 GB machine.
-To bring it back later: `bitbake-layers add-layer ../sources/meta-browser/meta-chromium`, add
-`chromium-ozone-wayland` to `IMAGE_INSTALL` in `bbz-image.bb`, and set
-`PARALLEL_MAKE:pn-chromium-ozone-wayland = "-j 3"` in local.conf. On the board, as root:
-`chromium --no-sandbox --ozone-platform=wayland`.
-
-### Claude Code ✅ (baked in)
-`recipes-devtools/claude-code/claude-code_<version>.bb` installs the official prebuilt
-**linux-arm64 (glibc)** binary as `/usr/bin/claude`. It's the same binary that
-`npm install -g @anthropic-ai/claude-code` picks on an arm64 board, because the npm package is
-only a wrapper around a platform package. Notes:
-- License `CLOSED`: Anthropic's commercial terms. The binary is downloaded at build time and is
-  never committed.
-- It's a single-file executable with its program appended to the ELF, so the recipe disables
-  stripping and debug splitting. Those would cut the payload off.
-- `/etc/profile.d/claude-code.sh` sets `DISABLE_AUTOUPDATER=1`. New versions come from rebuilding
-  the image, so the CLI doesn't overwrite a file the package manager owns.
-- To update, rename the recipe to the new version and replace `SRC_URI[sha256sum]` with the value
-  of `curl -sL <tarball-url> | sha256sum`. The command is in the recipe.
-
-On the board, set up the network (`nmtui`), then run `claude` and log in.
-
-### npm ✅ (current release, replacing the bundled one)
-The `nodejs` recipe bundles an older npm in its `nodejs-npm` package. `recipes-devtools/npm/npm_<version>.bb`
-installs the current npm from the registry instead. It's pure JavaScript, so it doesn't rebuild
-Node.js (about 3 h here). It conflicts with and replaces `nodejs-npm`, so only one of them can be
-in the image. Updating works like Claude Code: rename the recipe and update the sha256.
-
-### snap ❌ (not supported, and deliberately left out)
-There is **no snapd recipe** in any layer of this BSP (`meta-oe/.../snappy` is the Google
-compression library, not snapd). snapd expects Ubuntu's AppArmor profiles, its own confinement
-setup and the Snap Store's base snaps (core22/core24), none of which exist on a Yocto distro. Old
-community layers for it are unmaintained. If you need "install apps without rebuilding the image",
-use:
-- **Docker**: `imx-image-core` (which `bbz-image` builds on) already installs `docker` on i.MX8,
-  via meta-virtualization. You can run Ubuntu userspace in a container on the board.
-- **apt** with your own feed (above).
-If you truly need snaps, you want Ubuntu Core / Ubuntu for i.MX, not Yocto.
-
-## 6. Flash the board
-
-FRDM-IMX8MPLUS parts used here (from NXP's Quick Start Guide): **SW5** boot-mode DIP switch
-(1 = ON), **SW3** power slide switch, **J2** USB-C power in (PD charger ≥ 45 W), **J3** USB-C
-USB 3.0 OTG (flashing), **J19** USB-C debug UART. There's no "recovery button" like on Jetson
-boards: the SW5 position tells the SoC's BootROM where to boot from.
-
-| Boot from | SW5 1-2-3-4 |
-|---|---|
-| Serial download (`uuu`), the Jetson "recovery mode" equivalent | `0001` |
-| eMMC (factory default) | `0010` |
-| microSD | `0011` |
-
-### Option A: microSD (to try an image without touching the eMMC)
-
-```bash
-lsblk -o NAME,SIZE,RM,TRAN,MODEL        # identify the card, e.g. /dev/sdb. TRIPLE-CHECK, this erases it.
-cd tmp/deploy/images/imx8mp-lpddr4-frdm
-sudo umount /dev/sdX?* 2>/dev/null
-sudo bmaptool copy bbz-image-imx8mp-lpddr4-frdm.rootfs.wic.zst /dev/sdX   # whole card, not sdX1
-# or without bmap:
-# zstdcat bbz-image-imx8mp-lpddr4-frdm.rootfs.wic.zst | sudo dd of=/dev/sdX bs=4M conv=fsync status=progress
-```
-
-Set **SW5 = `0011`**, insert the card and power on.
-
-### Option B: eMMC with `uuu` (NXP's USB flasher, via the SoC's serial-download mode)
-`uuu` is NXP's counterpart of NVIDIA's `flash.sh`. In serial-download mode, the BootROM waits on USB.
-uuu loads the bootloader into RAM and starts it. U-Boot then exposes the eMMC over fastboot, and
-uuu streams the image into it.
-
-1. Power off, **SW5 = `0001`**, connect **J3** (the corner USB-C next to the 40-pin header) to the
-   PC, keep power on J2, power on with SW3.
-2. Check and flash:
-   ```bash
-   sudo uuu -lsusb                       # lists "MX865 SDPS:" (MX865 = i.MX 8M Plus)
-   cd tmp/deploy/images/imx8mp-lpddr4-frdm
-   sudo uuu -b emmc_all imx-boot-imx8mp-lpddr4-frdm-sd.bin-flash_evk \
-       'bbz-image-imx8mp-lpddr4-frdm.rootfs.wic.zst/*'      # "/*" = decompress while writing
-   ```
-   This takes about 4 minutes and ends with `Success 1  Failure 0`.
-3. Power off, **SW5 = `0010`** (eMMC), power on.
-
-### Serial console
-Connect **J19** to the PC. You're already in `dialout`.
-
-```bash
-sudo picocom -b 115200 /dev/ttyUSB0     # or /dev/ttyACM0; try the others if silent
-```
-
-Log in as `root` with no password. This is a dev-only default from NXP's
-`root-login-with-empty-password` fragment; remove it before any product.
-
-First-boot checks: `uname -a`, `hello-bbz`, `nmcli dev`, `apt --version`, `systemctl --failed`.
-
-## 7. Learning toolbox (use these constantly)
-
-```bash
-bitbake-layers show-layers               # layers + priorities
-bitbake-layers show-recipes 'chromium*'  # which layer provides what
-bitbake-layers show-appends              # every bbappend and what it touches
-bitbake-layers show-overlayed            # recipes overridden by a higher-priority layer
-bitbake -e bbz-image | grep ^IMAGE_INSTALL=
-bitbake -g bbz-image && bitbake -g -u taskexp bbz-image   # dependency graph / GUI explorer
-bitbake -c devshell hello-bbz            # shell inside the recipe's build env (CC, CFLAGS set)
-bitbake -c cleansstate hello-bbz         # force a full rebuild of one recipe
-oe-pkgdata-util list-pkg-files hello-bbz # which files went into which package
-oe-pkgdata-util find-path /usr/bin/nmcli # which package owns a file
-cat tmp/deploy/images/*/bbz-image-*.rootfs.manifest   # every package in the image
-buildhistory: add INHERIT += "buildhistory" to see diffs between image builds
-```
-
-### devtool: the workflow for kernel/U-Boot/driver work
-```bash
-devtool modify linux-imx            # checks the kernel source out into build/workspace/sources/linux-imx
-# ... edit drivers / DTS, commit with git ...
-devtool build linux-imx
-bitbake bbz-image                   # image now uses your workspace kernel
-devtool finish linux-imx ../sources/meta-bbz   # turns your commits into patches + a bbappend in YOUR layer
-```
-
-Same for `u-boot-imx` and `imx-atf`. Kernel config:
-
-```bash
-bitbake linux-imx -c menuconfig
-bitbake linux-imx -c diffconfig     # writes a .cfg fragment with just your changes; drop it into
-                                    # meta-bbz/recipes-kernel/linux/files/ and add it to SRC_URI in a
-                                    # linux-imx_%.bbappend
-```
-
-New software from a tarball or git URL: `devtool add <name> <url>` generates a recipe for you.
-Read it to see what it guessed.
-
-### Suggested learning path
-1. Build `hello-bbz`, break it on purpose (typo in the C file), read `log.do_compile`.
-2. Read `bbz-image.bb` → `imx-image-core.bb` → `core-image.bbclass` → `image.bbclass`.
-3. Use `bitbake -e` to trace where `IMAGE_INSTALL` and `DISTRO_FEATURES` get their values.
-4. Add a DT overlay or GPIO driver via `devtool modify linux-imx`, then `devtool finish`.
-5. Write a systemd service recipe (`inherit systemd`, `SYSTEMD_SERVICE:${PN}`).
-6. Make your own `DISTRO` conf in meta-bbz (`conf/distro/bbz.conf` with `require conf/distro/fsl-imx-wayland.conf`)
-   instead of editing local.conf. That's how real products are structured.
-7. Reference: the Yocto Mega Manual (docs.yoctoproject.org), and NXP's *i.MX Yocto Project User's
-   Guide* + *i.MX Linux User's Guide* for this release.
-
-## Layer contents
-
-```
-meta-bbz/
-├── conf/layer.conf                                          layer registration (priority, compat)
-├── recipes-bbz/images/bbz-image.bb                          the image
-├── recipes-bbz/packagegroups/packagegroup-bbz.bb            package lists
-├── recipes-bbz/hello-bbz/hello-bbz_1.0.bb (+ files/)        minimal C recipe to learn from
-├── recipes-bbz/home-hub-node/home-hub-node_1.0.bb           our app from <repo>/apps (externalsrc + systemd)
-├── recipes-connectivity/networkmanager/networkmanager_%.bbappend
-├── recipes-connectivity/bbz-wifi-config/bbz-wifi-config.bb  Wi-Fi auto-connect (creds from site.conf) + IW612 NM fixes
-├── recipes-connectivity/wpa-supplicant/wpa-supplicant_%.bbappend  re-enables D-Bus in NXP's wpa_supplicant
-├── recipes-connectivity/nxp-bt-enable/                     loads the IW612 Bluetooth driver after Wi-Fi is up
-├── recipes-devtools/claude-code/claude-code_<ver>.bb          Claude Code CLI (prebuilt arm64 binary)
-├── recipes-devtools/npm/npm_<ver>.bb                          current npm, replaces nodejs-npm
-└── recipes-kernel/linux/linux-imx_%.bbappend                SCMVERSION = "n" (see below)
-```
-
-### Package versions: why not "latest of everything"?
-Every recipe version comes from the layer commits pinned by NXP's release manifest
-(imx-6.18.37-2.1.0 on Yocto 6.0 LTS). NXP validates that exact combination: kernel, GPU/VPU
-drivers, GStreamer, Qt and so on. Moving every layer to its newest commit gets security fixes,
-but it leaves the tested combination and forces a near-full rebuild. Upgrading a single recipe to
-a new major version (such as Node.js 24) can break the recipes that depend on it.
-The approach used here: keep the release, and add newer versions of individual leaf
-packages in meta-bbz when needed (as with npm and Claude Code).
-
-### Your own applications: `apps/` + an externalsrc recipe
-Application code lives in the same repository, in `<repo>/apps/<name>/`, as a normal C project
-with its own Makefile. One small recipe per app puts it into the image:
+Each app is a normal C project with its own Makefile in `<repo>/apps/<name>/`. One small recipe
+builds it into the image:
 
 ```bitbake
 inherit externalsrc systemd
-EXTERNALSRC = "${BBZ_APPS_DIR}/home_hub_node"     # BBZ_APPS_DIR is set in conf/layer.conf
-EXTERNALSRC_BUILD = "${WORKDIR}/build"            # keep build output out of the source tree
+EXTERNALSRC = "${BBZ_APPS_DIR}/home_hub_node"     # BBZ_APPS_DIR: set in conf/layer.conf
+EXTERNALSRC_BUILD = "${WORKDIR}/build"            # build output outside the source tree
 EXTRA_OEMAKE = "-C ${S} BUILD='${B}' CC='${CC}' CFLAGS='${CFLAGS}' LDFLAGS='${LDFLAGS}'"
-do_install() { install -D -m 0755 ${B}/home_hub_node ${D}${bindir}/home_hub_node; ... }
-SYSTEMD_SERVICE:${PN} = "home-hub-node.service"   # installed + enabled at boot
+SYSTEMD_SERVICE:${PN} = "home-hub-node.service"   # installed and enabled at boot
 ```
 
-- **externalsrc** skips fetch and unpack and builds the folder in place. BitBake checksums its
-  files, so editing the source is enough: the next `bitbake` rebuilds the app and the image.
-  There's no version to bump.
-- **Pass `CC`, `CFLAGS` and `LDFLAGS` through.** Yocto's flags add hardening, and its `LDFLAGS`
-  add `--hash-style=gnu`. Without them the `ldflags` QA check fails.
-- **inherit systemd** adds the unit to the package plus a preset that enables it, and the
-  package's install scripts handle enable, stop and restart.
-- Then add the package name to `packagegroup-bbz-apps`.
-- To test on a running board without reflashing: `make app-deploy` (root Makefile) builds the
-  `.deb` and installs it with `dpkg -i`.
+- externalsrc checksums the folder, so editing the source is enough: the next build includes it.
+- Pass Yocto's `CC`/`CFLAGS`/`LDFLAGS` (hardening, `--hash-style=gnu`), or the `ldflags` QA check
+  fails.
+- Add the package to `packagegroup-bbz-apps`. Try it on a running board with `make app-deploy`.
 
-### Why `linux-imx_%.bbappend` sets `SCMVERSION = "n"`
-NXP's default (`SCMVERSION = "y"`) appends the git hash to the kernel release and, if git reports
-local changes, `-dirty`. Inside the build that check reported a clean tree as dirty. The kernel
-package became `kernel-6.18.37-…-dirty`, while jailhouse's module depended on the name without
-`-dirty`, so `do_rootfs` failed with "unmet dependencies". With `SCMVERSION = "n"`, the release
-name comes only from the recipe, and the kernel and all modules agree.
+## 6. Learning toolbox
+
+```bash
+bitbake-layers show-layers | show-appends | show-recipes 'name*'
+bitbake -e bbz-image | grep ^IMAGE_INSTALL=     # final value of a variable
+bitbake -c devshell hello-bbz                   # shell in a recipe's build environment
+bitbake -c cleansstate hello-bbz                # force a full rebuild of one recipe
+oe-pkgdata-util find-path /usr/bin/nmcli        # which package owns a file
+devtool modify linux-imx                        # edit kernel/U-Boot sources, then:
+devtool finish linux-imx ../sources/meta-bbz    #   your commits become patches + a bbappend here
+bitbake linux-imx -c menuconfig && bitbake linux-imx -c diffconfig   # kernel config fragment
+```
+
+Suggested path: build and deliberately break `hello-bbz`; read `bbz-image.bb` →
+`imx-image-core.bb` → `image.bbclass`; trace `IMAGE_INSTALL` with `bitbake -e`; write a systemd
+service recipe; later, move `local.conf` settings into your own `conf/distro/bbz.conf`.
+Reference: the Yocto Mega Manual and NXP's *i.MX Yocto Project User's Guide*.
+
+## 7. Layer contents
+
+```
+meta-bbz/
+├── conf/layer.conf                                   priority 12, LAYERSERIES wrynose, BBZ_APPS_DIR
+├── recipes-bbz/images/bbz-image.bb                   the image (+ systemd-networkd masked)
+├── recipes-bbz/packagegroups/packagegroup-bbz.bb     network / devtools / apps package lists
+├── recipes-bbz/hello-bbz/                            minimal C recipe to learn from
+├── recipes-bbz/home-hub-node/                        our app (externalsrc + systemd)
+├── recipes-bsp/bbz-flash-mode/                       reboot into U-Boot fastboot for `make flash`
+├── recipes-bsp/u-boot/u-boot-imx_%.bbappend          U-Boot LED software blink
+├── recipes-connectivity/bbz-wifi-config/             Wi-Fi profile + NetworkManager settings for the IW612
+├── recipes-connectivity/bbz-wifi-recover/            reloads the Wi-Fi driver if its SDIO link failed at boot
+├── recipes-connectivity/networkmanager/              nmtui + Wi-Fi PACKAGECONFIG
+├── recipes-connectivity/nxp-bt-enable/               loads the Bluetooth driver after Wi-Fi is up
+├── recipes-connectivity/wpa-supplicant/              re-enables D-Bus in NXP's wpa_supplicant
+├── recipes-devtools/claude-code/                     Claude Code binary + login token
+├── recipes-devtools/npm/                             current npm
+└── recipes-kernel/linux/                             SCMVERSION = "n"; Wi-Fi SDIO 100 MHz DTS patch
+```
+
+`SCMVERSION = "n"`: NXP's default appends the git hash and, when git sees local changes,
+`-dirty` to the kernel release. A spurious `-dirty` broke the module dependencies in `do_rootfs`;
+without the hash, the kernel and all modules agree on one name.

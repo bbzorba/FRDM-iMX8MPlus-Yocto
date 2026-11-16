@@ -24,3 +24,6 @@
 
 # Application build output (apps/<name>/build/ from a manual `make`)
 /apps/**/build/
+
+# Python bytecode
+__pycache__/

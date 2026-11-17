@@ -19,7 +19,11 @@ IMAGE_INSTALL += " \
     packagegroup-bbz-apps \
     apt \
     dpkg \
+    kernel-module-nxp-wlan \
 "
+# kernel-module-nxp-wlan: the IW612 Wi-Fi driver (moal/mlan). NXP only lists it in
+# MACHINE_EXTRA_RRECOMMENDS, and with Debian packaging recommendations are not installed,
+# so name it here.
 
 # NetworkManager and ConnMan both want to own the interfaces; keep only NM.
 # BAD_RECOMMENDATIONS drops packages that are pulled in only as recommendations.

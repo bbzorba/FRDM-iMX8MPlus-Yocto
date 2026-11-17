@@ -6,12 +6,14 @@ Yocto build tree for **`bbz-image`**, a custom Linux image for NXP's **FRDM-IMX8
 - BSP: NXP **imx-6.18.37-2.1.0** (Linux 6.18, Yocto Project **6.0 "wrynose"** LTS),
   `DISTRO = fsl-imx-wayland`, `MACHINE = imx8mp-lpddr4-frdm`, Debian packaging
 - Image: NXP's `imx-image-core` + NetworkManager (Wi-Fi auto-connect) + Bluetooth + apt +
-  Node.js 22 with current npm + Claude Code + dev tools + our apps
+  Node.js 22 with current npm + Claude Code + dev tools + our apps; the Cortex-M7 is usable
+  from Linux (remoteproc + RPMsg)
 
 | Document | Content |
 |---|---|
 | [sources/meta-bbz/README.md](sources/meta-bbz/README.md) | our layer, Yocto basics, Wi-Fi/Bluetooth fixes |
 | [docs/README.md](docs/README.md) | the board: modules, sensors, Cortex-M7, NXP manuals |
+| [docs/M7_A53_ARCHITECTURE.md](docs/M7_A53_ARCHITECTURE.md) | Cortex-A53 + Cortex-M7: RPMsg, memory map, DDR sharing, memory protection |
 | [apps/home_hub_node/README.md](apps/home_hub_node/README.md) | our app ([architecture](apps/home_hub_node/ARCHITECTURE.md)) |
 
 ```

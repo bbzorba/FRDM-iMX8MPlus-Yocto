@@ -10,8 +10,10 @@
 # deterministic, and every kernel module is built against the same name.
 SCMVERSION = "n"
 
-# Board fix: cap the IW612 Wi-Fi SDIO bus (usdhc1) at 100 MHz. At SDR104/200 MHz the first
-# SDIO transfer after NetworkManager starts timed out in about half of the boots and Wi-Fi
-# stayed dead until reboot; at 100 MHz all test boots were clean.
 FILESEXTRAPATHS:prepend := "${THISDIR}/files:"
+# Wi-Fi: cap the IW612 SDIO bus (usdhc1) at 100 MHz. The first SDIO transfers after boot
+# time out less often (about 1 boot in 4 instead of 1 in 2); bbz-wifi-recover handles the rest.
 SRC_URI += "file://0001-imx8mp-frdm-limit-wifi-sdio-to-100mhz.patch"
+# Cortex-M7 (see u-boot-imx_%.bbappend): the RPMsg TTY driver is not loaded on demand when
+# M7 firmware announces its channel, so load it at boot; then /dev/ttyRPMSG* appears.
+KERNEL_MODULE_AUTOLOAD += "imx_rpmsg_tty"

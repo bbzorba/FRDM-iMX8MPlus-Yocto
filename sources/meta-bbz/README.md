@@ -55,6 +55,7 @@ Most useful debug command: `bitbake -e <recipe> | less` (every variable and how 
 | Bluetooth | `recipes-connectivity/nxp-bt-enable` | see section 4 |
 | our apps | `recipes-bbz/home-hub-node`, `hello-bbz` | see section 5 |
 | flash without boot switch | `recipes-bsp/bbz-flash-mode`, `recipes-bsp/u-boot` | `make flash`; LED blinks while flashing |
+| Cortex-M7 from Linux | `recipes-bsp/u-boot` (`m7-rpmsg.cfg`), `recipes-kernel/linux` | rpmsg device tree by default, M7 clocks kept on, `imx_rpmsg_tty` loaded at boot; see [docs/M7_A53_ARCHITECTURE.md](../../docs/M7_A53_ARCHITECTURE.md) |
 
 Not included: **Chromium** (too big to build on this host; re-add via `meta-browser/meta-chromium`)
 and **snap** (no snapd for Yocto; use Docker, which is in the image, or apt with your own feed).
@@ -124,7 +125,7 @@ meta-bbz/
 ├── recipes-bbz/hello-bbz/                            minimal C recipe to learn from
 ├── recipes-bbz/home-hub-node/                        our app (externalsrc + systemd)
 ├── recipes-bsp/bbz-flash-mode/                       reboot into U-Boot fastboot for `make flash`
-├── recipes-bsp/u-boot/u-boot-imx_%.bbappend          U-Boot LED software blink
+├── recipes-bsp/u-boot/u-boot-imx_%.bbappend          LED software blink; M7 device tree + clocks
 ├── recipes-connectivity/bbz-wifi-config/             Wi-Fi profile + NetworkManager settings for the IW612
 ├── recipes-connectivity/bbz-wifi-recover/            reloads the Wi-Fi driver if its SDIO link failed at boot
 ├── recipes-connectivity/networkmanager/              nmtui + Wi-Fi PACKAGECONFIG
@@ -132,7 +133,8 @@ meta-bbz/
 ├── recipes-connectivity/wpa-supplicant/              re-enables D-Bus in NXP's wpa_supplicant
 ├── recipes-devtools/claude-code/                     Claude Code binary + login token
 ├── recipes-devtools/npm/                             current npm
-└── recipes-kernel/linux/                             SCMVERSION = "n"; Wi-Fi SDIO 100 MHz DTS patch
+└── recipes-kernel/linux/                             SCMVERSION = "n"; Wi-Fi SDIO 100 MHz DTS patch;
+                                                      imx_rpmsg_tty autoload
 ```
 
 `SCMVERSION = "n"`: NXP's default appends the git hash and, when git sees local changes,

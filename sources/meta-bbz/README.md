@@ -55,7 +55,7 @@ Most useful debug command: `bitbake -e <recipe> | less` (every variable and how 
 | Bluetooth | `recipes-connectivity/nxp-bt-enable` | see section 4 |
 | our apps | `recipes-bbz/home-hub-node`, `hello-bbz` | see section 5 |
 | hardware watchdog | `recipes-bsp/bbz-watchdog` | systemd arms WDOG1 (30 s); a hang cold-resets the board |
-| NVMe not mounted at boot | `recipes-bsp/bbz-nvme-noautomount` | mounting it during boot browned the board out ([details](../../docs/README.md#boot-resets-caused-by-the-nvme-ssd)) |
+| NVMe not mounted at boot | `recipes-bsp/bbz-nvme-noautomount` | mounting it during boot browned the board out ([details](../../docs/README.md#power-boot-resets-and-wi-fi-errors-caused-by-the-nvme-ssd)) |
 | flash without boot switch | `recipes-bsp/bbz-flash-mode`, `recipes-bsp/u-boot` | `make flash`; LED blinks while flashing |
 | our device tree `imx8mp-bbz.dts`, Cortex-M7 from Linux | `recipes-kernel/linux` (patch 0002), `conf/layer.conf`, `recipes-bsp/u-boot` (`bbz-dtb.cfg`) | board DTS + M7 + which core owns which peripheral, booted by default; `imx_rpmsg_tty` loaded at boot; see [docs/M7_A53_ARCHITECTURE.md](../../docs/M7_A53_ARCHITECTURE.md) |
 
@@ -79,7 +79,7 @@ found on the board through the J19 console:
 | profile activated on `wfd0` instead of `mlan0` | NetworkManager managed all three driver interfaces | `bbz-wifi-config`: `uap0`/`wfd0`/`p2p-dev-*` unmanaged, profile bound to `mlan0`, no scan MAC randomization |
 | boot ~2 min slow without Ethernet | NXP also enables systemd-networkd, whose wait-online waits for Ethernet | `bbz-image.bb` masks systemd-networkd |
 | no `hci0` | NXP blacklists `btnxpuart`; loading it before the Wi-Fi firmware runs crashes the SDIO link | `nxp-bt-enable` loads it after `network-online.target` + 5 s |
-| no Wi-Fi after some boots: `cmd53 write error=-110` or `Wakeup card timeout`, then `mlan0` gone | the IW612's SDIO link times out on the first driver commands after boot. NetworkManager's start-up query is always the first, but it also failed with `mlan0` unmanaged, so NM is only the trigger. Rate: about 1 boot in 2 at 200 MHz, about 1 in 4 at 100 MHz. No effect: power save off, station-only `drv_mode=1`, SDIO runtime PM off; the upstream 20 ms regulator delay is already in NXP's DTS | kernel DTS patch caps the bus at 100 MHz, and **`bbz-wifi-recover`** reloads the driver when it happens: Wi-Fi is back about 30 s later |
+| no Wi-Fi after some boots: `cmd53 write error=-110` or `Wakeup card timeout`, then `mlan0` gone | the IW612's SDIO link timed out on the first driver commands after boot (about 1 boot in 2 at 200 MHz, 1 in 4 at 100 MHz). Most likely supply dips: the board runs on 5 V instead of PD 15 V, and the NVMe was checked/mounted at the same time. With the NVMe idle at boot: 0 errors in 10 boots ([details](../../docs/README.md#power-boot-resets-and-wi-fi-errors-caused-by-the-nvme-ssd)). No effect: power save off, `drv_mode=1`, SDIO runtime PM off | **`bbz-nvme-noautomount`**; the 100 MHz SDIO cap and **`bbz-wifi-recover`** (driver reload, Wi-Fi back ~30 s later) stay as safety nets |
 
 ## 5. Our applications (`<repo>/apps/` + externalsrc recipes)
 

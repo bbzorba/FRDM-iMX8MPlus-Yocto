@@ -27,3 +27,7 @@
 
 # Python bytecode
 __pycache__/
+
+# externalsrc symlinks Yocto creates in apps/<name>/
+/apps/**/oe-logs
+/apps/**/oe-workdir

@@ -1,0 +1,10 @@
+[Unit]
+Description=Heartbeat from Linux to the Cortex-M7 (bbz-m7-boot supervises the A53s)
+
+[Service]
+ExecStart=/usr/bin/bbz-m7-heartbeat
+Restart=always
+Nice=-10
+
+[Install]
+WantedBy=multi-user.target

@@ -23,6 +23,8 @@ IMAGE_INSTALL += " \
     bbz-watchdog \
     bbz-nvme-noautomount \
     bbz-quiet-console \
+    bbz-m7-boot \
+    bbz-m7-heartbeat \
 "
 # kernel-module-nxp-wlan: the IW612 Wi-Fi driver (moal/mlan). NXP only lists it in
 # MACHINE_EXTRA_RRECOMMENDS, and with Debian packaging recommendations are not installed,
@@ -30,6 +32,12 @@ IMAGE_INSTALL += " \
 # bbz-watchdog: systemd arms the hardware watchdog (recipes-bsp/bbz-watchdog).
 # bbz-nvme-noautomount: the NVMe isn't mounted at boot (it browned the board out there).
 # bbz-quiet-console: only kernel errors on the serial console (no Wi-Fi scan chatter).
+# bbz-m7-boot: Cortex-M7 bootloader; the .bin goes on the boot partition, U-Boot starts it.
+# bbz-m7-heartbeat: Linux -> M7 heartbeat (the M7 supervises the A53s).
+IMAGE_BOOT_FILES:append = " bbz-m7-boot.bin"
+do_image_wic[depends] += "bbz-m7-boot:do_deploy"
+# Bluetooth is not part of the image; recipes-connectivity/nxp-bt-enable
+# can be added back to packagegroup-bbz-network together with bluez5.
 
 # NetworkManager and ConnMan both want to own the interfaces; keep only NM.
 # BAD_RECOMMENDATIONS drops packages that are pulled in only as recommendations.

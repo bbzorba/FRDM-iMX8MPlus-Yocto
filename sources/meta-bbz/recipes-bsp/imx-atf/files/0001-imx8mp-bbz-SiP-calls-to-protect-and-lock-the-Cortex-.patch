@@ -1,0 +1,87 @@
+From cc2a72b784a69cfdde58ec36e5e355c8eb16878a Mon Sep 17 00:00:00 2001
+From: bbzorba <bbzorba@hotmail.com>
+Date: Tue, 17 Nov 2026 22:16:30 +0100
+Subject: [PATCH] imx8mp: bbz SiP calls to protect and lock the Cortex-M7
+
+U-Boot sets RDC memory regions for the M7 TCM and DDR window and then
+locks: no further region changes, no M7 start/stop/reset through
+IMX_SIP_SRC, and SRC_M7RCR writable only by domain 1 (the M7).
+
+Upstream-Status: Inappropriate [bbz board configuration]
+---
+ plat/imx/common/imx_sip_svc.c | 52 +++++++++++++++++++++++++++++++++++
+ 1 file changed, 52 insertions(+)
+
+diff --git a/plat/imx/common/imx_sip_svc.c b/plat/imx/common/imx_sip_svc.c
+index 3307a41dc..8b98ea52b 100644
+--- a/plat/imx/common/imx_sip_svc.c
++++ b/plat/imx/common/imx_sip_svc.c
+@@ -16,6 +16,48 @@
+ 
+ #include <ele_api.h>
+ 
++#if defined(PLAT_imx8mp)
++/*
++ * bbz: protect the Cortex-M7 from the A53 side.
++ * U-Boot starts the M7 (bootaux), sets RDC memory regions for the M7's TCM and DDR window
++ * with BBZ_SIP_RDC_REGION and then calls BBZ_SIP_M7_LOCK. After the lock (until the next
++ * reset): no more region changes, the M7 can no longer be started/stopped/reset through
++ * IMX_SIP_SRC (Linux remoteproc), and SRC_M7RCR only accepts writes from domain 1 (the M7).
++ */
++#include <lib/mmio.h>
++#include <platform_def.h>
++
++#define BBZ_SIP_RDC_REGION	0xC20000B0
++#define BBZ_SIP_M7_LOCK		0xC20000B1
++#define BBZ_RDC_BASE		0x303D0000
++#define BBZ_SRC_M7RCR		(IMX_SRC_BASE + 0x0C)
++
++static bool bbz_m7_locked;
++
++static int bbz_rdc_region(u_register_t idx, u_register_t start, u_register_t end, u_register_t mrc)
++{
++	/* only the M7 TCM (22-26) and DRAM (39-46) regions, and only before the lock */
++	if (bbz_m7_locked || !((idx >= 22 && idx <= 26) || (idx >= 39 && idx <= 46)))
++		return SMC_UNK;
++	mmio_write_32(BBZ_RDC_BASE + 0x800 + 16 * idx, start);
++	mmio_write_32(BBZ_RDC_BASE + 0x804 + 16 * idx, end);
++	mmio_write_32(BBZ_RDC_BASE + 0x808 + 16 * idx, mrc);
++	NOTICE("bbz: RDC region %lu = 0x%lx-0x%lx MRC 0x%lx (read back 0x%x)\n", idx, start, end, mrc,
++	       mmio_read_32(BBZ_RDC_BASE + 0x808 + 16 * idx));
++	return 0;
++}
++
++static int bbz_m7_lock(void)
++{
++	/* SRC_M7RCR: DOM_EN | LOCK | DOMAIN1 -> only the M7 itself can write its reset register */
++	mmio_setbits_32(BBZ_SRC_M7RCR, (1U << 31) | (1U << 25));
++	mmio_setbits_32(BBZ_SRC_M7RCR, 1U << 30);
++	bbz_m7_locked = true;
++	NOTICE("bbz: M7 locked (SRC_M7RCR 0x%x)\n", mmio_read_32(BBZ_SRC_M7RCR));
++	return 0;
++}
++#endif
++
+ static int32_t imx_sip_setup(void)
+ {
+ 	return 0;
+@@ -30,6 +72,16 @@ static uintptr_t imx_sip_handler(unsigned int smc_fid,
+ 			void *handle,
+ 			u_register_t flags)
+ {
++#if defined(PLAT_imx8mp)
++	if (smc_fid == BBZ_SIP_RDC_REGION)
++		SMC_RET1(handle, bbz_rdc_region(x1, x2, x3, x4));
++	if (smc_fid == BBZ_SIP_M7_LOCK)
++		SMC_RET1(handle, bbz_m7_lock());
++	if (smc_fid == IMX_SIP_SRC && bbz_m7_locked && x1 != IMX_SIP_SRC_M4_STARTED) {
++		NOTICE("bbz: M7 is locked, refusing SRC request %lu\n", x1);
++		SMC_RET1(handle, SMC_UNK);
++	}
++#endif
+ 	switch (smc_fid) {
+ 	case IMX_SIP_AARCH32:
+ 		SMC_RET1(handle, imx_kernel_entry_handler(smc_fid, x1, x2, x3, x4));
+-- 
+2.53.0
+

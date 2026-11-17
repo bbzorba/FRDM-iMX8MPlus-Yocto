@@ -151,6 +151,12 @@ app-deploy: ## Build APP and install its package on the running board (no reflas
 # Ctrl+C is deliberately passed to the board (to stop programs running there), and Ctrl+D
 # only logs out of the board's shell. The console itself closes with Ctrl+A then Ctrl+X.
 # Access needs the 'dialout' group, not sudo.
+reset: ## Reset the whole board, also when Linux/U-Boot hang (M7 bootloader over J19, else SSH reboot)
+	@python3 $(TOP)/scripts/board-reset.py /dev/ttyACM1 $(BOARD)
+
+m7-console: ## Cortex-M7 console on J19 port 2 (bbz-m7-boot: h help, s status, RR reset; exit Ctrl+A Ctrl+X)
+	picocom -b 115200 /dev/ttyACM1
+
 console: ## Linux serial console on debug USB-C J19 (exit: Ctrl+A, then Ctrl+X)
 	@test -c "$(SERIAL)" || { echo "$(SERIAL) not found: is J19 connected? Ports: $$(ls /dev/ttyACM* /dev/ttyUSB* 2>/dev/null | tr '\n' ' ')"; exit 1; }
 	@test -r "$(SERIAL)" -a -w "$(SERIAL)" || { echo "No access to $(SERIAL): add yourself to the dialout group (sudo usermod -aG dialout $$USER), then log in again"; exit 1; }
@@ -162,4 +168,4 @@ console: ## Linux serial console on debug USB-C J19 (exit: Ctrl+A, then Ctrl+X)
 	@echo "================================================================"
 	@picocom --quiet -b 115200 $(SERIAL); echo; echo "Console closed."
 
-.PHONY: help image app status lsusb wait-usb flash flash-recovery flash-sd check-files find ssh monitor logs app-deploy console
+.PHONY: help image app status lsusb wait-usb flash flash-recovery flash-sd check-files find ssh monitor logs app-deploy console reset m7-console

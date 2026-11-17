@@ -5,15 +5,15 @@ Yocto build tree for **`bbz-image`**, a custom Linux image for NXP's **FRDM-IMX8
 
 - BSP: NXP **imx-6.18.37-2.1.0** (Linux 6.18, Yocto Project **6.0 "wrynose"** LTS),
   `DISTRO = fsl-imx-wayland`, `MACHINE = imx8mp-lpddr4-frdm`, Debian packaging
-- Image: NXP's `imx-image-core` + NetworkManager (Wi-Fi auto-connect) + Bluetooth + apt +
-  Node.js 22 with current npm + Claude Code + dev tools + our apps; the Cortex-M7 is usable
-  from Linux (remoteproc + RPMsg)
+- Image: NXP's `imx-image-core` + NetworkManager (Wi-Fi auto-connect) + apt +
+  Node.js 22 with current npm + Claude Code + dev tools + our apps; our M7 bootloader starts
+  before Linux with its memory locked against the A53s (Bluetooth removed)
 
 | Document | Content |
 |---|---|
 | [sources/meta-bbz/README.md](sources/meta-bbz/README.md) | our layer, Yocto basics, Wi-Fi/Bluetooth fixes |
 | [docs/README.md](docs/README.md) | the board: modules, sensors, Cortex-M7, NXP manuals |
-| [docs/M7_A53_ARCHITECTURE.md](docs/M7_A53_ARCHITECTURE.md) | Cortex-A53 + Cortex-M7: our device tree, RPMsg, memory map, DDR sharing, memory protection, watchdogs |
+| [docs/M7_A53_ARCHITECTURE.md](docs/M7_A53_ARCHITECTURE.md) | Cortex-A53 + Cortex-M7: device tree, M7 bootloader and boot flow, memory map and protection, watchdogs, remote reset |
 | [apps/home_hub_node/README.md](apps/home_hub_node/README.md) | our app ([architecture](apps/home_hub_node/ARCHITECTURE.md)) |
 
 ```
@@ -66,6 +66,8 @@ share it.
 | `make monitor` / `make logs` | live board status every 5 s / follow the app's journal |
 | `make app-deploy` | rebuild the app and install it on the running board (no reflash) |
 | `make console` | serial console on J19. **Exit: Ctrl+A, then Ctrl+X** (Ctrl+C goes to the board) |
+| `make m7-console` | Cortex-M7 console (J19 port 2): `h` help, `s` status, `RR` reset the board |
+| `make reset` | reset the whole board from the PC, also when Linux or U-Boot hang (via the M7 bootloader; else SSH reboot) |
 
 `BOARD` defaults to `root@imx8mp-lpddr4-frdm.local` (avahi); override with `BOARD=root@<ip>`.
 Login: `root` without password (dev-only default).
@@ -77,7 +79,7 @@ Login: `root` without password (dev-only default).
 | **SW5** | boot-mode DIP switch (1 = ON): `0010` eMMC (normal), `0011` microSD, `0001` serial download |
 | **SW3** / **J2** | power switch / USB-C power in (PD charger ≥ 45 W) |
 | **J3** | USB-C OTG: all image data goes here |
-| **J19** | USB-C debug UART: `/dev/ttyACM0` = Linux console, `/dev/ttyACM1` = Cortex-M7. It can't reset the board; the reset input is J20 pin 10 ([details](docs/M7_A53_ARCHITECTURE.md#6-watchdogs-and-resetting-the-board)) |
+| **J19** | USB-C debug UART: `/dev/ttyACM0` = Linux console, `/dev/ttyACM1` = Cortex-M7. No reset line to the PC; `make reset` goes through the M7 ([details](docs/M7_A53_ARCHITECTURE.md#6-watchdogs-per-core-reset-and-remote-reset)) |
 
 Boot chain: Boot ROM → SPL (DDR setup) → ARM Trusted Firmware → U-Boot → Linux. SPL, ATF and
 U-Boot form `imx-boot` in the eMMC boot partition.

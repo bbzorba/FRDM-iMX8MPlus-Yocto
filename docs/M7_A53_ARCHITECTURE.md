@@ -2,8 +2,8 @@
 
 The i.MX 8M Plus is one chip with two kinds of CPU: **4× Cortex-A53** (up to 1.8 GHz, Linux) and
 **1× Cortex-M7** (800 MHz, bare metal or an RTOS). They share one DDR controller, the on-chip
-RAM and the peripherals. In `bbz-image` Linux runs on the A53s and starts M7 firmware through
-remoteproc; the two sides talk over RPMsg. Everything below was tested on this board.
+RAM and the peripherals. In `bbz-image` U-Boot starts our M7 bootloader (`bbz-m7-boot`) before Linux and locks the
+M7's memory; Linux runs on the A53s. Everything below was tested on this board.
 
 ## 1. Architecture
 
@@ -39,14 +39,14 @@ remoteproc; the two sides talk over RPMsg. Everything below was tested on this b
 
 | Way | How |
 |---|---|
-| Start/stop firmware from Linux | `R=$(dirname $(grep -l '^imx-rproc$' /sys/class/remoteproc/*/name))` (the DSP is another remoteproc); `echo <fw>.elf > $R/firmware; echo start > $R/state`; `echo stop > $R/state`. Firmware is read from `/lib/firmware` |
+| Start/stop firmware from Linux (only without the lock, see section 5) | `R=$(dirname $(grep -l '^imx-rproc$' /sys/class/remoteproc/*/name))` (the DSP is another remoteproc); `echo <fw>.elf > $R/firmware; echo start > $R/state`; `echo stop > $R/state`. Firmware is read from `/lib/firmware` |
 | Messages | the firmware announces a channel; for `rpmsg_lite_str_echo_rtos` Linux creates `/dev/ttyRPMSG30`. `imx_rpmsg_tty` is loaded at boot (it is not loaded on demand). Set the TTY to raw mode first (`stty -F /dev/ttyRPMSG30 raw -echo`): with the default terminal echo, Linux echoes the M7's replies back and the two loop forever |
 | M7 console | second port of J19: `/dev/ttyACM1` on the PC, 115200 8N1 (`picocom -b 115200 /dev/ttyACM1`) |
-| Start before Linux | U-Boot: `fatload mmc 2:1 0x48000000 <fw>.bin; cp.b 0x48000000 0x7e0000 0x20000; bootaux 0x7e0000` for TCM firmware. Linux then *attaches* to the running M7 instead of loading it. Use this when the M7 must be up within ~1 s of power-on |
+| Start before Linux (**default**) | U-Boot `preboot`: `fatload mmc ${mmcdev}:${mmcpart} 0x48000000 bbz-m7-boot.bin; cp.b 0x48000000 0x7e0000 0x20000; bootaux 0x7e0000`. Linux then *attaches* to the running M7 (remoteproc state `attached`). See section 7 |
 | Debugger | JTAG/SWD on J20 (e.g. MCUXpresso + J-Link) |
 | Build firmware | MCUXpresso SDK (`armgcc`, board `evkmimx8mp`), or Zephyr (`imx8mp_evk/mimx8ml8/m7`). NXP's prebuilt demos are in `/lib/firmware/imx8mp_m7_*` |
 
-Tested on the flashed `bbz-image` with `imx8mp_m7_TCM_rpmsg_lite_str_echo_rtos.elf`:
+Tested (before the M7 lock of section 5 existed) with `imx8mp_m7_TCM_rpmsg_lite_str_echo_rtos.elf`:
 remoteproc state `running`, `/dev/ttyRPMSG30` echoed every message back, stop and restart
 work, the M7 console printed each message it got, and Wi-Fi, Bluetooth and the app were
 unaffected.
@@ -144,37 +144,95 @@ reaches it. Protection is configured in three places:
 | Layer | Configured in | What it does | State in this image |
 |---|---|---|---|
 | `reserved-memory` + `no-map` | device tree | Linux's allocator never hands out those pages | **on** for all M7 regions. Software-only: a kernel bug or root via `/dev/mem` can still write there |
-| **RDC** (Resource Domain Controller) | TF-A (`plat/imx/imx8m/imx8mp/imx8mp_bl31_setup.c`) | gives every bus master a domain ID; per-peripheral (PDAP) and per-memory-region (MRC) read/write rights per domain, checked in hardware, lockable until the next reset | NXP's default: M7 = domain 1, UART2 and WDOG1 only for domain 0. **No DDR regions defined, so both cores can write all of DDR** |
+| **RDC** (Resource Domain Controller) | TF-A (`plat/imx/imx8m/imx8mp/imx8mp_bl31_setup.c`) | gives every bus master a domain ID; per-peripheral (PDAP) and per-memory-region (MRC) read/write rights per domain, checked in hardware, lockable until the next reset | M7 = domain 1 (NXP's default). **bbz: the M7's TCM and DDR window are M7 read/write, A53 read-only, locked** (below) |
 | **TZASC** (TZC-380) | TF-A, fuse-enabled | Secure vs. Non-secure DDR regions (for OP-TEE) | off (not fused); it separates *worlds*, not A53 vs M7 |
 | M7 **MPU** | the firmware | guards the M7 against its own bugs (stack overflow, null pointer), sets cache attributes | as configured in each firmware |
 
-**Do you need it?** For demos and development, no: the `no-map` reservations keep Linux off the
-M7's memory. For a system where a Linux fault must not be able to corrupt the M7 (e.g. a
-safety- or control-critical M7), yes: add RDC memory regions in TF-A that make the M7's
-DDR region writable only by domain 1, and assign its peripherals (UART4, CAN, …) to domain 1
-with PDAP, locked. Keep the RPMsg vrings and pool writable by both. In the other direction, an
-M7 bug can still overwrite Linux memory unless a region forbids domain 1 there. A blocked
-access returns a bus error to the offending core, and the RDC records its address and domain.
+**What `bbz-image` does (tested).** U-Boot's `bootcmd` calls two SiP functions added to TF-A
+(`recipes-bsp/imx-atf`), right before Linux:
 
-## 6. Watchdogs and resetting the board
+| Call | Effect |
+|---|---|
+| `smc 0xc20000b0 <region> <start> <end> <mrc>` | sets RDC region 22 (M7 TCM, A53-view addresses `0x7E0000–0x81F000`: ITCM + DTCM except the last 4 KB, the shared heartbeat page) and region 39 (DRAM `0x80000000–0x81000000`, encoded `(addr − 0x40000000) / 2`) to `0xC000000E` = locked, M7 read/write, A53 read-only. U-Boot reads numbers as **hex**: region 22 = `0x16`, 39 = `0x27` |
+| `smc 0xc20000b1` | lock: no further region changes; TF-A refuses M7 start/stop/reset from Linux (`IMX_SIP_SRC`); `SRC_M7RCR` = `0xC20000A8` (domain control on, locked, writable by the M7 only) |
+
+Test results: A53 writes (`devmem2`) to `0x80000000`, ITCM and DTCM are silently dropped (value
+unchanged, no bus error); the shared page stays writable; `echo stop` on the remoteproc fails
+("Failed to stop remote core") and the M7 keeps running; the M7's own check of its DDR pattern
+reports `DDR=ok` (without the lock it reported `DDR=CORRUPTED` after the same writes). Other
+bus masters (DMA, PCIe, USB) are in domain 0 too and are blocked the same way. Not covered yet:
+the M7's peripherals (PDAP for UART4, FlexCAN1, …), and the other direction (an M7 bug can still
+write Linux memory). Because Linux can't load firmware into the locked TCM any more, NXP's
+remoteproc demos need the lock removed from `bootcmd`.
+
+## 6. Watchdogs, per-core reset and remote reset
 
 | | A53 / Linux | M7 |
 |---|---|---|
-| Watchdog | **WDOG1**, `/dev/watchdog0`. systemd arms it at boot (`RuntimeWatchdogSec=30s`, recipe `bbz-watchdog`) and pets it; if Linux hangs, it fires after 30 s | **WDOG3**, disabled for Linux; the M7 firmware arms and pets it itself |
-| On timeout | WDOG1 drives `WDOG_B` (`fsl,ext-reset-output`) → the PMIC **cold-resets the whole board**: A53s, M7, everything | resets the SoC, or only signals an interrupt, as the firmware configures it |
+| Watchdog | **WDOG1** (`/dev/watchdog0`), armed by systemd (30 s, `bbz-watchdog`) | **WDOG3**, armed by `bbz-m7-boot` (2 s) |
+| On timeout | `WDOG_B` → PMIC cold reset of the **whole board** (A53s *and* M7). There is no A53-only watchdog; WDOG1's reset can only be masked (`SRC_A53RCR0`) | **M7 only** (`SRC_M7RCR.WDOG3_RST_OPTION` = 0, the default) |
+| Tested | kernel crash → board reset 31 s later; the M7 was reset too | firmware stops feeding → M7 rebooted 2 s later ("boot #2, reset by WDOG3"); Linux uptime continued |
 
-The two cores share one reset: there is no separate "reset only the A53s". To restart only the
-M7, Linux uses remoteproc (`echo stop`/`echo start > …/state`). Tested: after `echo c >
-/proc/sysrq-trigger` (kernel crash, `kernel.panic=0`, so no automatic reboot) the watchdog reset
-the board 29 s later and it booted normally; a SoC freeze from a bad M7 start was caught the
-same way. The PMIC's power-on status (`i2cget -f -y 0 0x25 0x05`) then has bit 6 (`WDOG_B`,
-0x40) set. The watchdog doesn't survive a reboot, so U-Boot and `make flash` aren't affected.
+**Separate resets.** Both cores are in one chip: the reset pins (`POR_B`, `SYS_nRST`, RESET
+button, J20 pin 10) reset the whole SoC. Per-core resets exist only in software, in the reset
+controller (SRC): `SRC_M7RCR` resets/enables the M7 (remoteproc and WDOG3 use it; tested),
+`SRC_A53RCR0/1` reset single A53 cores. A clean A53-only restart is not supported by NXP's boot
+flow (cores restart into TF-A's warm-boot path; a full Linux boot reruns the SPL, which
+re-initialises the DDR) and was not tested.
 
-**A hardware reset line from the PC:** J19 can't do it. Its CH342F USB-UART chip has RTS/DTR
-outputs, but they aren't connected on this board. The reset input is **J20 (JTAG) pin 10,
-`JTAG_RESET`**, which pulls `SYS_nRST` (cold reset) through diode D19. A JTAG probe (J-Link,
-MCU-Link) can drive it, or anything that shorts it to GND (an open-drain output of a USB GPIO
-adapter, a relay contact; ground is on J20 too). Pulling the same pin through D18 to `POR_B` (warm reset) is
-not populated on this board. Rework alternative: wire the CH342F `RTS0` pin to J20 pin 10, so
-toggling RTS on `/dev/ttyACM0` resets the board.
+**A53 crash with the M7 running (open issue).** With WDOG1 *not* armed, a Linux crash leaves
+the M7 running: it reports "A53 heartbeat LOST … M7 keeps running" within 5 s. But 20–55 s
+after the crash the M7 froze in 3 of 3 tests, also without its DDR accesses, and WDOG3 did not
+recover it. The cause is not found yet (next step: an M7 debugger on J20). Until then
+`bbz-image` keeps WDOG1 armed: after an A53 crash the whole board restarts within ~30 s and
+U-Boot starts the M7 again 1.8 s after the reset.
+
+**Remote reset from the PC (`make reset`).** No reset line is wired to the PC (J19's CH342F
+RTS/DTR are not connected; J20 pin 10 needs a probe or relay). Instead `bbz-m7-boot` takes `RR`
+on its console (J19 port 2, `/dev/ttyACM1`) and resets the SoC through WDOG3 switched to
+global reset. Works while Linux runs and while U-Boot hangs (tested: Linux login again
+~30 s later); not while the M7 itself is frozen (see above). `make reset` falls back to
+`systemctl reboot` over SSH.
+
+## 7. Boot flow, storage and the M7 bootloader
+
+**Storage.** No on-chip flash: the SoC has a boot ROM, OCRAM and the M7's 256 KB TCM. The board
+has 32 GB eMMC (boot device; hardware boot partition with `imx-boot` = SPL + TF-A + U-Boot at
+offset 0; user area: FAT boot partition with `Image`, DTBs, `bbz-m7-boot.bin`, and the ext4
+rootfs), 32 MB QSPI NOR on FlexSPI (unused; the M7 could execute from it in place at
+`0x08000000`), microSD and the NVMe SSD. **Both cores share all of it; the M7 has no flash of
+its own.** The boot ROM only starts A53 core 0; the M7 is held in reset until software on the
+A53 releases it.
+
+**Boot sequence (measured from `reboot`, both consoles timestamped):**
+
+| Time | Who | What |
+|---|---|---|
+| 0.4 s | A53 | boot ROM → SPL from eMMC boot partition, DDR training |
+| 0.9 s | A53 | TF-A (BL31) |
+| 1.0 s | A53 | U-Boot |
+| **1.8 s** | A53 → M7 | U-Boot `preboot` loads `bbz-m7-boot.bin` into ITCM (`0x7E0000` = M7 `0x0`) and `bootaux` releases the M7; its banner appears at once (M7 at 200 MHz from `sys_pll2_200m`) |
+| 4 s | A53 | `bootcmd`: RDC regions + lock, then the kernel starts |
+| 15.8 s | M7 | first Linux heartbeat |
+| 31 s | A53 | Linux login |
+
+**`bbz-m7-boot`** (`apps/m7_bootloader`, ~3.7 KB code + 112 B data in TCM): MPU set first
+(peripheral space = Device; without it the M7's speculative reads broke U-Boot's eMMC and froze
+Linux), UART4 console, WDOG3, A53 heartbeat supervision (Linux writes a counter to DTCM
+`0x2001F000` = A53 `0x0081F000` every second, `bbz-m7-heartbeat`), a 4 KB pattern in its DDR
+window checked every second, `RR` remote reset, and an application slot at `0x80100000`
+(header magic `BPPA`, stack, entry; `j` jumps there). Commands: `make m7-console`, then `h`.
+
+**RAM.** Linux sees 3.58 GB and uses ~350 MB at idle (largest user: Docker's `containerd`,
+71 MB). The M7 has 256 KB TCM and the 16 MB DDR window. A larger M7 application (an RTOS
+with 1–2 MB of code and up to ~1 MB of data) doesn't fit the TCM: it runs from the DDR window
+with the M7 caches on (MPU region cacheable), time-critical code and ISRs in ITCM. A Yocto recipe
+can build such an image with `gcc-arm-none-eabi-native` (as `bbz-m7-boot` does) and put it on the
+boot partition or into the application slot, so `make flash` deploys it together with Linux.
+
+**Hardening (not done yet):** drop Docker/containerd, Claude Code, Node.js,
+compilers and `-dev` packages; root password and SSH keys only; `/dev/mem` off
+(`CONFIG_DEVMEM=n`, `STRICT_DEVMEM`) once nothing needs it (the heartbeat would then go via
+RPMsg/MU); kernel lockdown and module signing; remove unused drivers (camera/ISP, VPU, GPU/NPU
+if unused, HDMI audio); RDC PDAP for the M7's peripherals; read-only rootfs.
 

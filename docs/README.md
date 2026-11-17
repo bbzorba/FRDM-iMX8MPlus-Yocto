@@ -29,7 +29,7 @@ From UM12340, Table 1 (features) and Table 3 (connectors). The last column says 
 | Part | Details | In the image |
 |---|---|---|
 | **SoC** i.MX 8M Plus | 4× Cortex-A53 up to 1.8 GHz, **Cortex-M7** 800 MHz, **NPU 2.3 TOPS**, ISP, H.264/H.265 VPU, 3D/2D GPU | A53 runs Linux; NPU/GPU/VPU drivers come with NXP's `imx-image-core`; **M7 usable from Linux** (see below) |
-| **Tri-radio module** u-blox MAYA-W276-00B (NXP IW612) | **Wi-Fi 6**, **Bluetooth 5.4 / BLE**, **IEEE 802.15.4** (Thread / Zigbee / Matter). On SDIO, UART, SPI, SAI | **Wi-Fi works** on `mlan0` (not `wlan0`): driver `nxp-wlan` + IW612 firmware + NetworkManager, auto-connect via `bbz-wifi-config` (see the meta-bbz README for the fixes it needed, incl. automatic recovery when the SDIO link fails at boot). **Bluetooth/BLE works**: `hci0` via `nxp-bt-enable` + BlueZ, central and peripheral roles (a 10 s scan found 26 devices). 802.15.4/Thread: layers present (`meta-nxp-openthread`, `meta-nxp-matter-baseline`) but no packages in the image yet |
+| **Tri-radio module** u-blox MAYA-W276-00B (NXP IW612) | **Wi-Fi 6**, **Bluetooth 5.4 / BLE**, **IEEE 802.15.4** (Thread / Zigbee / Matter). On SDIO, UART, SPI, SAI | **Wi-Fi works** on `mlan0` (not `wlan0`): driver `nxp-wlan` + IW612 firmware + NetworkManager, auto-connect via `bbz-wifi-config` (see the meta-bbz README for the fixes it needed, incl. automatic recovery when the SDIO link fails at boot). Bluetooth worked (`hci0`, BlueZ) but is removed from the image (not needed for the UAV tests; `nxp-bt-enable` can be added back). 802.15.4/Thread: layers present (`meta-nxp-openthread`, `meta-nxp-matter-baseline`) but no packages in the image yet |
 | Memory | 4 GB LPDDR4, 32 GB eMMC 5.1, 32 MB QSPI NOR, microSD 3.0 (J17) | eMMC = boot device |
 | **Ethernet** | 2× Gigabit RJ45 (J5, J7), PHY YT8521. ETH1 is a **PoE** powered device, ETH2 supports **TSN** | yes |
 | **M.2 Key M 2280** (J23) | PCIe, for an **NVMe SSD** (one is fitted on this board) or an NPU card | PCIe + NVMe drivers; one empty ext4 partition, **not mounted at boot** (see below): `mount /dev/nvme0n1p1 /mnt` |
@@ -52,20 +52,12 @@ power. The board has no environment sensors (add them on the 40-pin header or J2
 
 ## Cortex-M7
 
-The M7 is inside the same SoC, not a separate chip. `bbz-image` boots our own device tree,
-`imx8mp-bbz.dtb`, so Linux can start M7 firmware and exchange messages with it:
-
-```bash
-R=$(dirname $(grep -l '^imx-rproc$' /sys/class/remoteproc/*/name))   # the M7
-echo imx8mp_m7_TCM_rpmsg_lite_str_echo_rtos.elf > $R/firmware
-echo start > $R/state                              # M7 console: /dev/ttyACM1 on the PC
-stty -F /dev/ttyRPMSG30 raw -echo                  # else the echo loops forever
-echo hello > /dev/ttyRPMSG30                       # the demo echoes it back
-```
-
-The M7 owns UART4, FlexCAN1 and PWM4; everything else stays with Linux. Which core owns what,
-how to move a peripheral, memory map, DDR sharing, memory protection, watchdogs and the reset
-line: [M7_A53_ARCHITECTURE.md](M7_A53_ARCHITECTURE.md).
+The M7 is inside the same SoC, not a separate chip. U-Boot starts our bootloader
+`bbz-m7-boot` on it 1.8 s after reset, before Linux, and locks its memory against the A53s.
+Its console is J19 port 2 (`make m7-console`: `h` help, `s` status, `RR` reset the board). The
+M7 owns UART4, FlexCAN1 and PWM4 (`imx8mp-bbz.dtb`). Boot flow, memory map and protection,
+watchdogs and remote reset:
+[M7_A53_ARCHITECTURE.md](M7_A53_ARCHITECTURE.md).
 
 ## Power: boot resets and Wi-Fi errors caused by the NVMe SSD
 
@@ -101,6 +93,8 @@ normal reboot, `0x40` after the watchdog):
 | NVMe idle at boot (`bbz-nvme-noautomount`) | **0 resets in 15 reboots, 0 Wi-Fi SDIO errors in 10 boots** |
 | after boot: 8 GiB write 585 MiB/s, 8 GiB read 455 MiB/s | fine, input stayed 5.0–5.1 V (10 Hz samples) |
 | after boot: 8 GiB write + 4 busy CPU cores | brownout reset |
+
+| NVMe mounted at boot via `/etc/fstab` (empty filesystem, 2 reboots) | no resets; a 2 GiB file kept its checksum both times; Wi-Fi SDIO errors in 1 of 2 boots (recovered) |
 
 So the SSD works at 5 V input as long as it isn't combined with other heavy load. The Wi-Fi
 SDIO timeouts at boot (see the meta-bbz README) disappeared together with the NVMe load and

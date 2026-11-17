@@ -52,8 +52,11 @@ Most useful debug command: `bitbake -e <recipe> | less` (every variable and how 
 | Claude Code | `recipes-devtools/claude-code/claude-code_<ver>.bb` | official linux-arm64 binary; no strip (payload appended to the ELF); autoupdater off |
 | Claude login without browser | `recipes-devtools/claude-code/bbz-claude-auth.bb` | `CLAUDE_CODE_OAUTH_TOKEN` from `site.conf` (`claude setup-token` on the PC) in root-only `/etc/claude-code/auth.env` |
 | current npm | `recipes-devtools/npm/npm_<ver>.bb` | replaces the older `nodejs-npm` without rebuilding Node.js |
-| Bluetooth | `recipes-connectivity/nxp-bt-enable` | see section 4 |
+| Bluetooth | `recipes-connectivity/nxp-bt-enable` | **not in the image**; add it and `bluez5` back to `packagegroup-bbz-network` |
 | our apps | `recipes-bbz/home-hub-node`, `hello-bbz` | see section 5 |
+| M7 bootloader | `recipes-bsp/bbz-m7-boot` (source `apps/m7_bootloader`) | built with `gcc-arm-none-eabi-native`; `.bin` on the boot partition, U-Boot starts it |
+| M7 start + memory lock | `recipes-bsp/u-boot` (`bbz-m7.cfg`), `recipes-bsp/imx-atf` (SiP patch) | `preboot` bootaux, `bootcmd` RDC regions + lock |
+| A53 heartbeat for the M7 | `recipes-bsp/bbz-m7-heartbeat` | counter in DTCM every second |
 | hardware watchdog | `recipes-bsp/bbz-watchdog` | systemd arms WDOG1 (30 s); a hang cold-resets the board |
 | quiet serial console | `recipes-bsp/bbz-quiet-console` | `kernel.printk = 4 4 1 7` from ~8 s into boot: only kernel errors reach J19; the Wi-Fi driver's scan messages (every 30–300 s) stay in `dmesg`. More: `dmesg -n 8` |
 | NVMe not mounted at boot | `recipes-bsp/bbz-nvme-noautomount` | mounting it during boot browned the board out ([details](../../docs/README.md#power-boot-resets-and-wi-fi-errors-caused-by-the-nvme-ssd)) |
@@ -129,14 +132,17 @@ meta-bbz/
 ├── recipes-bbz/hello-bbz/                            minimal C recipe to learn from
 ├── recipes-bbz/home-hub-node/                        our app (externalsrc + systemd)
 ├── recipes-bsp/bbz-flash-mode/                       reboot into U-Boot fastboot for `make flash`
+├── recipes-bsp/bbz-m7-boot/                          M7 bootloader (apps/m7_bootloader)
+├── recipes-bsp/bbz-m7-heartbeat/                     Linux -> M7 heartbeat
+├── recipes-bsp/imx-atf/                              TF-A SiP calls: RDC regions + M7 lock
 ├── recipes-bsp/bbz-watchdog/                         systemd arms the hardware watchdog
 ├── recipes-bsp/bbz-nvme-noautomount/                 keeps udev from mounting the NVMe at boot
 ├── recipes-bsp/bbz-quiet-console/                    only kernel errors on the serial console
-├── recipes-bsp/u-boot/u-boot-imx_%.bbappend          LED software blink; boot imx8mp-bbz.dtb
+├── recipes-bsp/u-boot/u-boot-imx_%.bbappend          LED blink; imx8mp-bbz.dtb; start + lock the M7
 ├── recipes-connectivity/bbz-wifi-config/             Wi-Fi profile + NetworkManager settings for the IW612
 ├── recipes-connectivity/bbz-wifi-recover/            reloads the Wi-Fi driver if its SDIO link failed at boot
 ├── recipes-connectivity/networkmanager/              nmtui + Wi-Fi PACKAGECONFIG
-├── recipes-connectivity/nxp-bt-enable/               loads the Bluetooth driver after Wi-Fi is up
+├── recipes-connectivity/nxp-bt-enable/               loads the Bluetooth driver after Wi-Fi (not in the image)
 ├── recipes-connectivity/wpa-supplicant/              re-enables D-Bus in NXP's wpa_supplicant
 ├── recipes-devtools/claude-code/                     Claude Code binary + login token
 ├── recipes-devtools/npm/                             current npm

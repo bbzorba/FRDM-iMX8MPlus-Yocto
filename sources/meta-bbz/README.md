@@ -54,8 +54,10 @@ Most useful debug command: `bitbake -e <recipe> | less` (every variable and how 
 | current npm | `recipes-devtools/npm/npm_<ver>.bb` | replaces the older `nodejs-npm` without rebuilding Node.js |
 | Bluetooth | `recipes-connectivity/nxp-bt-enable` | see section 4 |
 | our apps | `recipes-bbz/home-hub-node`, `hello-bbz` | see section 5 |
+| hardware watchdog | `recipes-bsp/bbz-watchdog` | systemd arms WDOG1 (30 s); a hang cold-resets the board |
+| NVMe not mounted at boot | `recipes-bsp/bbz-nvme-noautomount` | mounting it during boot browned the board out ([details](../../docs/README.md#boot-resets-caused-by-the-nvme-ssd)) |
 | flash without boot switch | `recipes-bsp/bbz-flash-mode`, `recipes-bsp/u-boot` | `make flash`; LED blinks while flashing |
-| Cortex-M7 from Linux | `recipes-bsp/u-boot` (`m7-rpmsg.cfg`), `recipes-kernel/linux` | rpmsg device tree by default, M7 clocks kept on, `imx_rpmsg_tty` loaded at boot; see [docs/M7_A53_ARCHITECTURE.md](../../docs/M7_A53_ARCHITECTURE.md) |
+| our device tree `imx8mp-bbz.dts`, Cortex-M7 from Linux | `recipes-kernel/linux` (patch 0002), `conf/layer.conf`, `recipes-bsp/u-boot` (`bbz-dtb.cfg`) | board DTS + M7 + which core owns which peripheral, booted by default; `imx_rpmsg_tty` loaded at boot; see [docs/M7_A53_ARCHITECTURE.md](../../docs/M7_A53_ARCHITECTURE.md) |
 
 Not included: **Chromium** (too big to build on this host; re-add via `meta-browser/meta-chromium`)
 and **snap** (no snapd for Yocto; use Docker, which is in the image, or apt with your own feed).
@@ -119,13 +121,16 @@ Reference: the Yocto Mega Manual and NXP's *i.MX Yocto Project User's Guide*.
 
 ```
 meta-bbz/
-├── conf/layer.conf                                   priority 12, LAYERSERIES wrynose, BBZ_APPS_DIR
+├── conf/layer.conf                                   priority 12, LAYERSERIES wrynose, BBZ_APPS_DIR,
+│                                                     imx8mp-bbz.dtb in KERNEL_DEVICETREE
 ├── recipes-bbz/images/bbz-image.bb                   the image (+ systemd-networkd masked)
 ├── recipes-bbz/packagegroups/packagegroup-bbz.bb     network / devtools / apps package lists
 ├── recipes-bbz/hello-bbz/                            minimal C recipe to learn from
 ├── recipes-bbz/home-hub-node/                        our app (externalsrc + systemd)
 ├── recipes-bsp/bbz-flash-mode/                       reboot into U-Boot fastboot for `make flash`
-├── recipes-bsp/u-boot/u-boot-imx_%.bbappend          LED software blink; M7 device tree + clocks
+├── recipes-bsp/bbz-watchdog/                         systemd arms the hardware watchdog
+├── recipes-bsp/bbz-nvme-noautomount/                 keeps udev from mounting the NVMe at boot
+├── recipes-bsp/u-boot/u-boot-imx_%.bbappend          LED software blink; boot imx8mp-bbz.dtb
 ├── recipes-connectivity/bbz-wifi-config/             Wi-Fi profile + NetworkManager settings for the IW612
 ├── recipes-connectivity/bbz-wifi-recover/            reloads the Wi-Fi driver if its SDIO link failed at boot
 ├── recipes-connectivity/networkmanager/              nmtui + Wi-Fi PACKAGECONFIG
@@ -133,8 +138,8 @@ meta-bbz/
 ├── recipes-connectivity/wpa-supplicant/              re-enables D-Bus in NXP's wpa_supplicant
 ├── recipes-devtools/claude-code/                     Claude Code binary + login token
 ├── recipes-devtools/npm/                             current npm
-└── recipes-kernel/linux/                             SCMVERSION = "n"; Wi-Fi SDIO 100 MHz DTS patch;
-                                                      imx_rpmsg_tty autoload
+└── recipes-kernel/linux/                             SCMVERSION = "n"; patches: Wi-Fi SDIO 100 MHz,
+                                                      our device tree imx8mp-bbz.dts; imx_rpmsg_tty autoload
 ```
 
 `SCMVERSION = "n"`: NXP's default appends the git hash and, when git sees local changes,

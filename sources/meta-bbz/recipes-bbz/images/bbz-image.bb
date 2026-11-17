@@ -20,10 +20,14 @@ IMAGE_INSTALL += " \
     apt \
     dpkg \
     kernel-module-nxp-wlan \
+    bbz-watchdog \
+    bbz-nvme-noautomount \
 "
 # kernel-module-nxp-wlan: the IW612 Wi-Fi driver (moal/mlan). NXP only lists it in
 # MACHINE_EXTRA_RRECOMMENDS, and with Debian packaging recommendations are not installed,
 # so name it here.
+# bbz-watchdog: systemd arms the hardware watchdog (recipes-bsp/bbz-watchdog).
+# bbz-nvme-noautomount: the NVMe isn't mounted at boot (it browned the board out there).
 
 # NetworkManager and ConnMan both want to own the interfaces; keep only NM.
 # BAD_RECOMMENDATIONS drops packages that are pulled in only as recommendations.

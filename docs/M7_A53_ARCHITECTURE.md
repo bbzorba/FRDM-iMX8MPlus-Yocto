@@ -39,7 +39,7 @@ remoteproc; the two sides talk over RPMsg. Everything below was tested on this b
 
 | Way | How |
 |---|---|
-| Start/stop firmware from Linux | `R=/sys/class/remoteproc/remoteproc0` (name `imx-rproc`); `echo <fw>.elf > $R/firmware; echo start > $R/state`; `echo stop > $R/state`. Firmware is read from `/lib/firmware` |
+| Start/stop firmware from Linux | `R=$(dirname $(grep -l '^imx-rproc$' /sys/class/remoteproc/*/name))` (the DSP is another remoteproc); `echo <fw>.elf > $R/firmware; echo start > $R/state`; `echo stop > $R/state`. Firmware is read from `/lib/firmware` |
 | Messages | the firmware announces a channel; for `rpmsg_lite_str_echo_rtos` Linux creates `/dev/ttyRPMSG30`. `imx_rpmsg_tty` is loaded at boot (it is not loaded on demand). Set the TTY to raw mode first (`stty -F /dev/ttyRPMSG30 raw -echo`): with the default terminal echo, Linux echoes the M7's replies back and the two loop forever |
 | M7 console | second port of J19: `/dev/ttyACM1` on the PC, 115200 8N1 (`picocom -b 115200 /dev/ttyACM1`) |
 | Start before Linux | U-Boot: `fatload mmc 2:1 0x48000000 <fw>.bin; cp.b 0x48000000 0x7e0000 0x20000; bootaux 0x7e0000` for TCM firmware. Linux then *attaches* to the running M7 instead of loading it. Use this when the M7 must be up within ~1 s of power-on |
@@ -51,16 +51,40 @@ remoteproc state `running`, `/dev/ttyRPMSG30` echoed every message back, stop an
 work, the M7 console printed each message it got, and Wi-Fi, Bluetooth and the app were
 unaffected.
 
-### What `bbz-image` changes for this
+### Our device tree: `imx8mp-bbz.dts`
 
-| Change | Why |
+U-Boot boots `imx8mp-bbz.dtb`, our own device tree
+(`sources/meta-bbz/recipes-kernel/linux/files/0002-arm64-dts-add-imx8mp-bbz.patch`). It includes
+the board DTS `imx8mp-frdm.dts`, which describes all FRDM hardware on top of the SoC description
+`imx8mp.dtsi`. It then adds, in five commented sections:
+
+1. memory reserved for the M7 (`no-map`): firmware region and RPMsg buffers;
+2. the M7 node for remoteproc (`fsl,imx8mp-cm7`, mailbox MU1, its memory regions);
+3. **which core owns which peripheral**;
+4. the clocks of M7-owned peripherals, kept on with `init-on-array`;
+5. the A53 watchdog's reset output.
+
+| Core | Peripherals |
 |---|---|
-| U-Boot boots `imx8mp-frdm-rpmsg.dtb` by default (`m7-rpmsg.cfg`) | the default `imx8mp-frdm.dtb` has no M7 node, so remoteproc only sees the DSP |
-| U-Boot `PREBOOT` adds `clk-imx8mp.mcore_booted clk_ignore_unused` to the kernel command line | Linux otherwise switches off clocks it isn't using itself, but the M7's peripherals (UART4, audio) need them. Without these arguments, starting the M7 froze the whole SoC |
+| **M7** | UART4 (console, J19 port 2), FlexCAN1 (CAN on J27), PWM4, WDOG3 |
+| **Linux** | everything else: UART2 console, UART3, I2C1–3 (PMIC, codec, GPIO expanders), audio (WM8962, SAI3, PDM mic) + HiFi4 DSP, ECSPI2 (802.15.4 radio), QSPI NOR, Ethernet, USB, PCIe/NVMe, Wi-Fi/BT, display, camera, WDOG1 |
+| shared | DDR, OCRAM, MU1 (doorbells), GPIO banks (pin by pin) |
 
-Costs of the rpmsg device tree: the **audio codec, SAI3, PDM mic, UART4, ECSPI2, FlexCAN1, PWM4
-and FlexSPI belong to the M7** (Linux doesn't drive them), unused clocks stay on (slightly more power), and about 290 MB of
-DDR is reserved for the M7. To go back: `setenv fdtfile imx8mp-frdm.dtb; saveenv` in U-Boot.
+**Moving a peripheral to the M7:** add `&<node> { status = "disabled"; };` in section 3 and its
+root clock (`IMX8MP_CLK_<NAME>_ROOT` from `include/dt-bindings/clock/imx8mp-clock.h`) to
+`init-on-array` in section 4. Linux then neither drives the device nor claims its pins; the M7
+firmware sets up the pins and the device. **Back to Linux:** delete both again. Missing
+hardware is added the same way: a node or `&label { … }` override in this one file. Hardware
+enforcement of the split (RDC) is configured in TF-A, see section 5.
+
+One setting can't live in the device tree: the kernel argument `clk-imx8mp.mcore_booted`.
+U-Boot adds it on every boot (`PREBOOT="run prepare_mcore"`, `bbz-dtb.cfg`). Linux then leaves the
+gates of the SoC's root clocks alone. Without it, starting M7 firmware froze the whole SoC (the
+watchdog reset it 30 s later), even with the M7's peripheral clocks in `init-on-array`; with
+it, start/stop and RPMsg work. (`clk_ignore_unused` also works but keeps every unused clock on.)
+
+Compared with NXP's `imx8mp-frdm-rpmsg.dtb`, Linux keeps audio and the DSP, the M7 gets CAN and
+PWM, and only 18 MB of DDR is reserved instead of ~290 MB.
 
 ## 3. Memory map
 
@@ -72,11 +96,10 @@ firmware ELFs):
 | ITCM | `0x0000_0000` | `0x007E_0000` | 128 KB | M7 code (`*_TCM_*` firmware) — fastest, M7 only at full speed |
 | DTCM | `0x2000_0000` | `0x0080_0000` | 128 KB | M7 data and stack |
 | OCRAM | `0x0090_0000` | `0x0090_0000` | 512 KB | TF-A (BL31) runs at `0x0097_0000`: don't use it from the M7 |
-| DDR `m4_reserved` | `0x8000_0000` | same | 16 MB | `*_DDR_*` firmware code+data; non-cacheable data of the TCM firmware |
+| DDR `m7_reserved` | `0x8000_0000` | same | 16 MB | `*_DDR_*` firmware code+data; non-cacheable data of the TCM firmware |
 | DDR vrings | `0x5500_0000`, `0x5500_8000` | same | 2× 32 KB | RPMsg ring buffers |
 | DDR `rsc_table` | `0x550F_F000` | same | 4 KB | resource table: where the M7 tells Linux about its vrings |
 | DDR `vdevbuffer` | `0x5540_0000` | same | 1 MB | RPMsg message payloads |
-| DDR `audio_reserved`, `micfil` | `0x8100_0000`, `0x9100_0000` | same | 256 MB + 16 MB | M7 audio buffers |
 | DDR rest | — | `0x4000_0000`… | ~3.7 GB | Linux |
 
 All reserved regions are `no-map` in the device tree: Linux never allocates them and doesn't
@@ -132,3 +155,26 @@ DDR region writable only by domain 1, and assign its peripherals (UART4, CAN, �
 with PDAP, locked. Keep the RPMsg vrings and pool writable by both. In the other direction, an
 M7 bug can still overwrite Linux memory unless a region forbids domain 1 there. A blocked
 access returns a bus error to the offending core, and the RDC records its address and domain.
+
+## 6. Watchdogs and resetting the board
+
+| | A53 / Linux | M7 |
+|---|---|---|
+| Watchdog | **WDOG1**, `/dev/watchdog0`. systemd arms it at boot (`RuntimeWatchdogSec=30s`, recipe `bbz-watchdog`) and pets it; if Linux hangs, it fires after 30 s | **WDOG3**, disabled for Linux; the M7 firmware arms and pets it itself |
+| On timeout | WDOG1 drives `WDOG_B` (`fsl,ext-reset-output`) → the PMIC **cold-resets the whole board**: A53s, M7, everything | resets the SoC, or only signals an interrupt, as the firmware configures it |
+
+The two cores share one reset: there is no separate "reset only the A53s". To restart only the
+M7, Linux uses remoteproc (`echo stop`/`echo start > …/state`). Tested: after `echo c >
+/proc/sysrq-trigger` (kernel crash, `kernel.panic=0`, so no automatic reboot) the watchdog reset
+the board 29 s later and it booted normally; a SoC freeze from a bad M7 start was caught the
+same way. The PMIC's power-on status (`i2cget -f -y 0 0x25 0x05`) then has bit 6 (`WDOG_B`,
+0x40) set. The watchdog doesn't survive a reboot, so U-Boot and `make flash` aren't affected.
+
+**A hardware reset line from the PC:** J19 can't do it. Its CH342F USB-UART chip has RTS/DTR
+outputs, but they aren't connected on this board. The reset input is **J20 (JTAG) pin 10,
+`JTAG_RESET`**, which pulls `SYS_nRST` (cold reset) through diode D19. A JTAG probe (J-Link,
+MCU-Link) can drive it, or anything that shorts it to GND (an open-drain output of a USB GPIO
+adapter, a relay contact; ground is on J20 too). Pulling the same pin through D18 to `POR_B` (warm reset) is
+not populated on this board. Rework alternative: wire the CH342F `RTS0` pin to J20 pin 10, so
+toggling RTS on `/dev/ttyACM0` resets the board.
+

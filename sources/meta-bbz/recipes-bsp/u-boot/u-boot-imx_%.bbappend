@@ -1,4 +1,4 @@
 FILESEXTRAPATHS:prepend := "${THISDIR}/files:"
 # led-blink.cfg: software LED blink (`led led-0 blink <ms>`) while `make flash` runs
-# m7-rpmsg.cfg:  Cortex-M7 device tree by default + keep the M7's clocks on
-SRC_URI += "file://led-blink.cfg file://m7-rpmsg.cfg"
+# bbz-dtb.cfg:   boot our device tree imx8mp-bbz.dtb by default, kernel arg for the M7 clocks
+SRC_URI += "file://led-blink.cfg file://bbz-dtb.cfg"

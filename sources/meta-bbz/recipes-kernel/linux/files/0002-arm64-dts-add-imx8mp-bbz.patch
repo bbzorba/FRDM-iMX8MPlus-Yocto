@@ -1,0 +1,131 @@
+From: bbzorba <bbzorba@hotmail.com>
+Subject: [PATCH] arm64: dts: add imx8mp-bbz.dts (FRDM-IMX8MPLUS, A53 Linux + M7)
+
+The bbz-image device tree: the FRDM board DTS plus the Cortex-M7 parts
+(reserved memory, remoteproc node) and the peripheral split between the
+cores in one file. See docs/M7_A53_ARCHITECTURE.md in the bbz repository.
+
+Upstream-Status: Inappropriate [board configuration]
+---
+--- a/arch/arm64/boot/dts/freescale/Makefile
++++ b/arch/arm64/boot/dts/freescale/Makefile
+@@ -440,6 +440,7 @@
+ dtb-$(CONFIG_ARCH_MXC) += imx8mp-frdm-boe-wuxga-lvds0-panel.dtb imx8mp-frdm-boe-wuxga-lvds1-panel.dtb
+ dtb-$(CONFIG_ARCH_MXC) += imx8mp-frdm-os08a20.dtb imx8mp-frdm-os08a20-dual.dtb
+ dtb-$(CONFIG_ARCH_MXC) += imx8mp-frdm-rpmsg.dtb
++dtb-$(CONFIG_ARCH_MXC) += imx8mp-bbz.dtb
+ dtb-$(CONFIG_ARCH_MXC) += imx8mp-frdm-8mic-revE.dtb
+ dtb-$(CONFIG_ARCH_MXC) += imx8mp-frdm-root.dtb
+ 
+--- a/arch/arm64/boot/dts/freescale/imx8mp-bbz.dts
++++ b/arch/arm64/boot/dts/freescale/imx8mp-bbz.dts
+@@ -0,0 +1,109 @@
++// SPDX-License-Identifier: (GPL-2.0 OR MIT)
++/*
++ * bbz-image device tree for the FRDM-IMX8MPLUS: Linux on the 4x Cortex-A53, firmware on the
++ * Cortex-M7, and one place that says which core owns which peripheral.
++ *
++ * imx8mp-frdm.dts describes all board hardware (and includes imx8mp.dtsi, the SoC). This file
++ * only adds what the M7 needs and moves peripherals from Linux to the M7.
++ *
++ * Move a peripheral to the M7:   &<node> { status = "disabled"; };   in section 3, and add
++ *                                its root clock to init-on-array in section 4.
++ * Give one back to Linux:        delete those lines again.
++ * Linux then neither drives the device nor claims its pins. The M7 firmware sets up the pins
++ * and the device itself. Hardware enforcement (RDC) is configured in TF-A, not here.
++ */
++
++/dts-v1/;
++
++#include "imx8mp-frdm.dts"
++
++/ {
++	model = "NXP FRDM-IMX8MPLUS (bbz: A53 Linux + M7)";
++
++	/* 1. Memory reserved for the M7 (no-map: Linux never allocates or maps it) */
++	reserved-memory {
++		#address-cells = <2>;
++		#size-cells = <2>;
++		ranges;
++
++		/* M7 code/data of *_DDR_* firmware; non-cacheable data of *_TCM_* firmware */
++		m7_reserved: m7@80000000 {
++			reg = <0 0x80000000 0 0x1000000>;
++			no-map;
++		};
++
++		/* RPMsg: two vrings, resource table, 1 MB message pool (mapped uncached by Linux) */
++		vdev0vring0: vdev0vring0@55000000 {
++			reg = <0 0x55000000 0 0x8000>;
++			no-map;
++		};
++
++		vdev0vring1: vdev0vring1@55008000 {
++			reg = <0 0x55008000 0 0x8000>;
++			no-map;
++		};
++
++		rsc_table: rsc-table@550ff000 {
++			reg = <0 0x550ff000 0 0x1000>;
++			no-map;
++		};
++
++		vdevbuffer: vdevbuffer@55400000 {
++			compatible = "shared-dma-pool";
++			reg = <0 0x55400000 0 0x100000>;
++			no-map;
++		};
++	};
++
++	/* 2. The M7, controlled by Linux remoteproc (/sys/class/remoteproc/remoteproc*) */
++	imx8mp-cm7 {
++		compatible = "fsl,imx8mp-cm7";
++		rsc-da = <0x55000000>;
++		clocks = <&clk IMX8MP_CLK_M7_DIV>;
++		mbox-names = "tx", "rx", "rxdb";
++		mboxes = <&mu 0 1>, <&mu 1 1>, <&mu 3 1>;	/* MU1; the HiFi4 DSP uses MU2 */
++		memory-region = <&vdevbuffer>, <&vdev0vring0>, <&vdev0vring1>,
++				<&rsc_table>, <&m7_reserved>;
++		fsl,startup-delay-ms = <500>;
++	};
++};
++
++/*
++ * 3. Peripheral ownership
++ *
++ *  M7:     UART4    console, second port of J19 (not enabled for Linux in the board DTS)
++ *          FlexCAN1 CAN on J27
++ *          PWM4     PWM4_OUT on pad SAI5_RXFS
++ *          WDOG3    the M7's own watchdog (disabled for Linux in imx8mp.dtsi)
++ *  Linux:  everything else: UART2 console, UART3, I2C1-3 (PMIC, codec, GPIO expanders),
++ *          audio (WM8962, SAI3, PDM mic) + HiFi4 DSP, ECSPI2 (IW612 802.15.4 radio), FlexSPI
++ *          NOR, Ethernet, USB, PCIe/NVMe, Wi-Fi/BT, display, camera, WDOG1
++ *  Shared: DDR, OCRAM, MU1 (M7 <-> Linux doorbells), GPIO banks (per pin; avoid when possible)
++ */
++&flexcan1 {
++	status = "disabled";
++};
++
++&pwm4 {
++	status = "disabled";
++};
++
++/* The CAN transceiver's standby control: keep it active although Linux has no CAN user */
++&reg_can1_stby {
++	regulator-always-on;
++};
++
++/*
++ * 4. Clocks of M7-owned peripherals. Linux switches off clocks without a Linux user; the M7
++ * accessing a device whose clock is off stalls the bus and freezes the whole SoC.
++ */
++&clk {
++	init-on-array = <IMX8MP_CLK_UART4_ROOT
++			 IMX8MP_CLK_CAN1_ROOT
++			 IMX8MP_CLK_PWM4_ROOT>;
++};
++
++/* 5. Linux's hardware watchdog: on timeout WDOG_B makes the PMIC cold-reset the whole board */
++&wdog1 {
++	fsl,ext-reset-output;	/* already set by imx8mp-frdm.dts; kept here as documentation */
++};

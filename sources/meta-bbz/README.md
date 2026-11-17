@@ -55,6 +55,7 @@ Most useful debug command: `bitbake -e <recipe> | less` (every variable and how 
 | Bluetooth | `recipes-connectivity/nxp-bt-enable` | see section 4 |
 | our apps | `recipes-bbz/home-hub-node`, `hello-bbz` | see section 5 |
 | hardware watchdog | `recipes-bsp/bbz-watchdog` | systemd arms WDOG1 (30 s); a hang cold-resets the board |
+| quiet serial console | `recipes-bsp/bbz-quiet-console` | `kernel.printk = 4 4 1 7` from ~8 s into boot: only kernel errors reach J19; the Wi-Fi driver's scan messages (every 30–300 s) stay in `dmesg`. More: `dmesg -n 8` |
 | NVMe not mounted at boot | `recipes-bsp/bbz-nvme-noautomount` | mounting it during boot browned the board out ([details](../../docs/README.md#power-boot-resets-and-wi-fi-errors-caused-by-the-nvme-ssd)) |
 | flash without boot switch | `recipes-bsp/bbz-flash-mode`, `recipes-bsp/u-boot` | `make flash`; LED blinks while flashing |
 | our device tree `imx8mp-bbz.dts`, Cortex-M7 from Linux | `recipes-kernel/linux` (patch 0002), `conf/layer.conf`, `recipes-bsp/u-boot` (`bbz-dtb.cfg`) | board DTS + M7 + which core owns which peripheral, booted by default; `imx_rpmsg_tty` loaded at boot; see [docs/M7_A53_ARCHITECTURE.md](../../docs/M7_A53_ARCHITECTURE.md) |
@@ -130,6 +131,7 @@ meta-bbz/
 ├── recipes-bsp/bbz-flash-mode/                       reboot into U-Boot fastboot for `make flash`
 ├── recipes-bsp/bbz-watchdog/                         systemd arms the hardware watchdog
 ├── recipes-bsp/bbz-nvme-noautomount/                 keeps udev from mounting the NVMe at boot
+├── recipes-bsp/bbz-quiet-console/                    only kernel errors on the serial console
 ├── recipes-bsp/u-boot/u-boot-imx_%.bbappend          LED software blink; boot imx8mp-bbz.dtb
 ├── recipes-connectivity/bbz-wifi-config/             Wi-Fi profile + NetworkManager settings for the IW612
 ├── recipes-connectivity/bbz-wifi-recover/            reloads the Wi-Fi driver if its SDIO link failed at boot

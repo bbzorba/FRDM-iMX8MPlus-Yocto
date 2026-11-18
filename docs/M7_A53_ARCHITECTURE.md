@@ -169,7 +169,7 @@ remoteproc demos need the lock removed from `bootcmd`.
 
 | | A53 / Linux | M7 |
 |---|---|---|
-| Watchdog | **WDOG1** (`/dev/watchdog0`), armed by systemd (30 s, `bbz-watchdog`) | **WDOG3**, armed by `bbz-m7-boot` (2 s) |
+| Watchdog | **WDOG1** (`/dev/watchdog0`), armed by U-Boot (60 s), then systemd (30 s, `bbz-watchdog`) | **WDOG3**, armed by `bbz-m7-boot` (2 s) |
 | On timeout | `WDOG_B` → PMIC cold reset of the **whole board** (A53s *and* M7). There is no A53-only watchdog; WDOG1's reset can only be masked (`SRC_A53RCR0`) | **M7 only** (`SRC_M7RCR.WDOG3_RST_OPTION` = 0, the default) |
 | Tested | kernel crash → board reset 31 s later; the M7 was reset too | firmware stops feeding → M7 rebooted 2 s later ("boot #2, reset by WDOG3"); Linux uptime continued |
 
@@ -180,18 +180,24 @@ controller (SRC): `SRC_M7RCR` resets/enables the M7 (remoteproc and WDOG3 use it
 flow (cores restart into TF-A's warm-boot path; a full Linux boot reruns the SPL, which
 re-initialises the DDR) and was not tested.
 
-**A53 crash with the M7 running (open issue).** With WDOG1 *not* armed, a Linux crash leaves
-the M7 running: it reports "A53 heartbeat LOST … M7 keeps running" within 5 s. But 20–55 s
-after the crash the M7 froze in 3 of 3 tests, also without its DDR accesses, and WDOG3 did not
-recover it. The cause is not found yet (next step: an M7 debugger on J20). Until then
-`bbz-image` keeps WDOG1 armed: after an A53 crash the whole board restarts within ~30 s and
-U-Boot starts the M7 again 1.8 s after the reset.
+**WDOG1 from power-on.** U-Boot already arms WDOG1 (60 s, `bbz-wdt.cfg`) and feeds it while it
+runs (prompt, fastboot: a full `make flash` of 4 min 41 s passed); Linux's driver keeps feeding it
+until systemd takes over. Tested: a deliberately hung U-Boot reset the board after 60 s, so a
+SoC freeze at any stage (e.g. a faulty M7 firmware stalling the bus) no longer needs a hand on
+the RESET button.
+
+**A53 crash with the M7 running.** The M7 reports "A53 heartbeat LOST … M7 keeps running"
+within 5 s and keeps working until WDOG1 restarts the whole board (30 s in `bbz-image`, at most
+128 s). Tested twice with WDOG1 at 120 s: the M7 ran 90–110 s after a kernel crash, and none of
+its clock, bus, PLL or power-controller registers changed. With WDOG1 completely disabled the M7
+froze 20–55 s after the crash in 3 of 3 tests; that mechanism is not understood yet, so WDOG1
+stays armed. After the board reset U-Boot starts the M7 again 1.8 s later.
 
 **Remote reset from the PC (`make reset`).** No reset line is wired to the PC (J19's CH342F
 RTS/DTR are not connected; J20 pin 10 needs a probe or relay). Instead `bbz-m7-boot` takes `RR`
 on its console (J19 port 2, `/dev/ttyACM1`) and resets the SoC through WDOG3 switched to
 global reset. Works while Linux runs and while U-Boot hangs (tested: Linux login again
-~30 s later); not while the M7 itself is frozen (see above). `make reset` falls back to
+~30 s later). If the whole SoC is frozen, WDOG1 resets it (see above). `make reset` falls back to
 `systemctl reboot` over SSH.
 
 ## 7. Boot flow, storage and the M7 bootloader
@@ -222,6 +228,15 @@ Linux), UART4 console, WDOG3, A53 heartbeat supervision (Linux writes a counter 
 `0x2001F000` = A53 `0x0081F000` every second, `bbz-m7-heartbeat`), a 4 KB pattern in its DDR
 window checked every second, `RR` remote reset, and an application slot at `0x80100000`
 (header magic `BPPA`, stack, entry; `j` jumps there). Commands: `make m7-console`, then `h`.
+
+**Trying M7 firmware safely.** Never put an untested M7 build into the image or onto the boot
+partition: U-Boot starts it at every boot, and one that freezes the SoC then loops the board
+(WDOG1 resets it every 60 s). Load it by hand instead, at the U-Boot prompt, before the lock:
+`smc 0xc2000005 0x2` (stop the M7), `loady 0x48000000` (YMODEM from the PC, e.g. `sb`),
+`cp.b 0x48000000 0x7e0000 0x20000`, `bootaux 0x7e0000`, `boot`. A reset brings back the firmware
+from the boot partition. If a bad one does get there: stop autoboot, hold the M7 in reset
+(`mw.l 0x3039000C 0xa9`, within ~1 s), `loady` a good one and `fatwrite mmc 2:1 0x48000000
+bbz-m7-boot.bin <size>`.
 
 **RAM.** Linux sees 3.58 GB and uses ~350 MB at idle (largest user: Docker's `containerd`,
 71 MB). The M7 has 256 KB TCM and the 16 MB DDR window. A larger M7 application (an RTOS

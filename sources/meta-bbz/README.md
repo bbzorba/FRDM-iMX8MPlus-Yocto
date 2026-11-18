@@ -56,6 +56,7 @@ Most useful debug command: `bitbake -e <recipe> | less` (every variable and how 
 | our apps | `recipes-bbz/home-hub-node`, `hello-bbz` | see section 5 |
 | M7 bootloader | `recipes-bsp/bbz-m7-boot` (source `apps/m7_bootloader`) | built with `gcc-arm-none-eabi-native`; `.bin` on the boot partition, U-Boot starts it |
 | M7 start + memory lock | `recipes-bsp/u-boot` (`bbz-m7.cfg`), `recipes-bsp/imx-atf` (SiP patch) | `preboot` bootaux, `bootcmd` RDC regions + lock |
+| watchdog from power-on | `recipes-bsp/u-boot` (`bbz-wdt.cfg`) | U-Boot arms and feeds WDOG1 (60 s); a frozen SoC resets itself |
 | A53 heartbeat for the M7 | `recipes-bsp/bbz-m7-heartbeat` | counter in DTCM every second |
 | hardware watchdog | `recipes-bsp/bbz-watchdog` | systemd arms WDOG1 (30 s); a hang cold-resets the board |
 | quiet serial console | `recipes-bsp/bbz-quiet-console` | `kernel.printk = 4 4 1 7` from ~8 s into boot: only kernel errors reach J19; the Wi-Fi driver's scan messages (every 30–300 s) stay in `dmesg`. More: `dmesg -n 8` |
